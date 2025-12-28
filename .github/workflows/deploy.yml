@@ -27,10 +27,13 @@ jobs:
 
       - name: Add SSH key
         run: |
+          set -euxo pipefail
           install -m 700 -d ~/.ssh
           echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H "${{ secrets.PI_HOST }}" >> ~/.ssh/known_hosts
+          ls -la ~/.ssh
+          ssh-keyscan -H -v "${{ secrets.PI_HOST }}" >> ~/.ssh/known_hosts
+          ssh -o StrictHostKeyChecking=yes -o BatchMode=yes -v "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" "echo ssh-ok" || true
 
       - name: Deploy via rsync
         run: |
