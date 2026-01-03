@@ -81,5 +81,36 @@ GitHub Actions로 Raspberry Pi에 배포합니다.
 - `PI_USER`
 - `PI_PATH`
 - `PI_SSH_KEY`
+- `TAILSCALE_AUTHKEY` (Tailscale 사용 시)
 
 systemd 서비스는 `systemd/hailo-infer.service` 참고.
+
+### systemd 설치/부팅 자동 복구
+
+Pi에서 최초 1회 설정:
+
+```bash
+sudo cp /home/ray/hailo-infer/systemd/hailo-infer.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hailo-infer
+```
+
+헬스체크 타이머(자동 재시작 포함):
+
+```bash
+sudo cp /home/ray/hailo-infer/systemd/hailo-infer-healthcheck.service /etc/systemd/system/
+sudo cp /home/ray/hailo-infer/systemd/hailo-infer-healthcheck.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now hailo-infer-healthcheck.timer
+```
+
+### venv 주의사항
+
+`/home/ray/hailo-infer/.venv`가 없으면 `ExecStart`가 실패합니다. 배포 후 venv를 보장하세요:
+
+```bash
+cd /home/ray/hailo-infer
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements.txt
+```
