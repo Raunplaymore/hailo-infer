@@ -29,6 +29,7 @@ jobs:
         run: |
           set -euxo pipefail
           install -m 700 -d ~/.ssh
+          echo "PI_HOST=${{ secrets.PI_HOST }}"
           echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ls -la ~/.ssh
