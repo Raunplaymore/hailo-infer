@@ -7,6 +7,7 @@
 - Hailo 추론 메타 기반 스윙 이벤트 분할
 - 코칭 지표 산출
 - 분석 결과 JSON 생성
+- `pi_service`는 `INFER_BASE_URL`로 본 서비스를 호출합니다.
 
 `hailo-camera`는 GStreamer + hailonet으로 `.meta.json`을 생성하며,
 본 서비스는 메타 기반 분석(A)을 우선으로 수행합니다.
@@ -40,6 +41,8 @@ uvicorn app.main:app --host 0.0.0.0 --port 3002
 ### Health Check
 
 `GET /health`
+
+systemd 헬스체크 타이머가 이 엔드포인트를 주기적으로 확인합니다.
 
 ### Job 생성
 
