@@ -29,20 +29,20 @@ jobs:
         run: |
           set -euxo pipefail
           install -m 700 -d ~/.ssh
-          echo "PI_HOST=${{ secrets.PI_HOST }}"
-          echo "PI_HOST_has_slash=$([[ "${{ secrets.PI_HOST }}" == *"/"* ]] && echo yes || echo no)"
-          echo "PI_HOST_has_colon=$([[ "${{ secrets.PI_HOST }}" == *":"* ]] && echo yes || echo no)"
-          echo "PI_HOST_len=$(printf '%s' "${{ secrets.PI_HOST }}" | wc -c)"
+          echo "PI_HOST=100.124.151.57"
+          echo "PI_HOST_has_slash=$([[ "100.124.151.57" == *"/"* ]] && echo yes || echo no)"
+          echo "PI_HOST_has_colon=$([[ "100.124.151.57" == *":"* ]] && echo yes || echo no)"
+          echo "PI_HOST_len=$(printf '%s' "100.124.151.57" | wc -c)"
           echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ls -la ~/.ssh
-          ssh-keyscan -H -v "${{ secrets.PI_HOST }}" >> ~/.ssh/known_hosts
-          ssh -o StrictHostKeyChecking=yes -o BatchMode=yes -v "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" "echo ssh-ok" || true
+          ssh-keyscan -H -v "100.124.151.57" >> ~/.ssh/known_hosts
+          ssh -o StrictHostKeyChecking=yes -o BatchMode=yes -v "${{ secrets.PI_USER }}@100.124.151.57" "echo ssh-ok" || true
 
       - name: Deploy via rsync
         run: |
-          rsync -az --delete --exclude '.venv' --exclude '.git' ./ "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}:${{ secrets.PI_PATH }}"
+          rsync -az --delete --exclude '.venv' --exclude '.git' ./ "${{ secrets.PI_USER }}@100.124.151.57:${{ secrets.PI_PATH }}"
 
       - name: Restart service
         run: |
-          ssh "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" "sudo systemctl restart hailo-infer"
+          ssh "${{ secrets.PI_USER }}@100.124.151.57" "sudo systemctl restart hailo-infer"
