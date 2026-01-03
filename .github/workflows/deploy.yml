@@ -30,6 +30,9 @@ jobs:
           set -euxo pipefail
           install -m 700 -d ~/.ssh
           echo "PI_HOST=${{ secrets.PI_HOST }}"
+          echo "PI_HOST_has_slash=$(printf '%s' "${{ secrets.PI_HOST }}" | rg -q '/' && echo yes || echo no)"
+          echo "PI_HOST_has_colon=$(printf '%s' "${{ secrets.PI_HOST }}" | rg -q ':' && echo yes || echo no)"
+          echo "PI_HOST_len=$(printf '%s' "${{ secrets.PI_HOST }}" | wc -c)"
           echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ls -la ~/.ssh
