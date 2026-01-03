@@ -50,4 +50,9 @@ jobs:
 
       - name: Restart service
         run: |
-          ssh "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" "sudo systemctl restart hailo-infer"
+          ssh "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" "\
+            sudo cp /home/ray/hailo-infer/systemd/hailo-infer-healthcheck.service /etc/systemd/system/ && \
+            sudo cp /home/ray/hailo-infer/systemd/hailo-infer-healthcheck.timer /etc/systemd/system/ && \
+            sudo systemctl daemon-reload && \
+            sudo systemctl enable --now hailo-infer-healthcheck.timer && \
+            sudo systemctl restart hailo-infer"
