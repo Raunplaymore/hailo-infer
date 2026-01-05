@@ -117,16 +117,18 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
     if not isinstance(frames, list) or not frames:
         raise CoachError("NOT_SWING", "meta frames missing")
 
+    min_points = 6
+    min_conf = 0.15
     fps = int(meta.get("fps", 60))
     times_ms = _normalize_times(frames, fps)
     for idx, frame in enumerate(frames):
         frame["_t_ms"] = times_ms[idx] if times_ms[idx] is not None else idx * (1000.0 / fps)
 
     centers, times, sizes, confs = _select_clubhead(frames)
-    if len(centers) < 15:
+    if len(centers) < min_points:
         if not force:
             raise CoachError("NOT_SWING", "insufficient clubhead detections")
-    if confs and np.mean(confs) < 0.25 and not force:
+    if confs and np.mean(confs) < min_conf and not force:
         raise CoachError("NOT_SWING", "clubhead detections too weak")
 
     speeds = _speeds(centers)
