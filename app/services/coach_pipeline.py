@@ -169,7 +169,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
 
     summary = f"Swing plane {swing_label}. Impact stability {impact_label}. Tempo {ratio}:1."
 
-    duration_ms = int(frames[-1][\"_t_ms\"]) if frames else 0
+    duration_ms = int(frames[-1]["_t_ms"]) if frames else 0
 
     return {
         "ok": True,
