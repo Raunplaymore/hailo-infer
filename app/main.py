@@ -113,6 +113,16 @@ def create_job(payload: JobCreateRequest, background_tasks: BackgroundTasks) -> 
 def job_status(job_id: str) -> JobStatusResponse:
     info = store.get(job_id)
     if not info:
+        cached = store.load_cached_result(job_id)
+        if cached:
+            status = "succeeded" if cached.get("ok") is True else "failed"
+            return JobStatusResponse(
+                ok=True,
+                jobId=job_id,
+                status=status,
+                errorCode=cached.get("errorCode"),
+                errorMessage=cached.get("errorMessage"),
+            )
         raise HTTPException(status_code=404, detail="job not found")
     return JobStatusResponse(
         ok=True,
