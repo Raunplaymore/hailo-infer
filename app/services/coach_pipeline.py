@@ -3,6 +3,8 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+CLUBHEAD_LABELS = {"clubhead", "club head", "golf club", "club", "baseball bat", "bat"}
+
 
 class CoachError(Exception):
     def __init__(self, code: str, message: str) -> None:
@@ -33,7 +35,11 @@ def _select_clubhead(frames: List[dict]) -> Tuple[List[Tuple[float, float]], Lis
     confs = []
     for frame in frames:
         detections = frame.get("detections", [])
-        candidates = [d for d in detections if d.get("label") == "clubhead"]
+        candidates = [
+            d
+            for d in detections
+            if str(d.get("label") or "").strip().lower() in CLUBHEAD_LABELS
+        ]
         if not candidates:
             continue
         best = max(candidates, key=lambda d: d.get("conf", 0.0))

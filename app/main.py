@@ -95,8 +95,12 @@ def create_job(payload: JobCreateRequest, background_tasks: BackgroundTasks) -> 
     if payload.mode == "infer_meta_from_video" and not settings.hailo_available:
         raise HTTPException(status_code=400, detail="infer_meta_from_video disabled on this host")
 
+    existing = store.get(payload.jobId)
+    if existing and existing.status in {"queued", "running"} and not payload.options.force:
+        return JobCreateResponse(ok=True, jobId=payload.jobId, status=existing.status)
+
     cached = store.load_cached_result(payload.jobId)
-    if cached and not payload.options.force:
+    if cached and cached.get("ok") is True and not payload.options.force:
         store.init_job(payload.jobId, payload.mode, "succeeded")
         return JobCreateResponse(ok=True, jobId=payload.jobId, status="succeeded")
 
