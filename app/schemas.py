@@ -1,4 +1,4 @@
-from typing import Dict, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -64,10 +64,68 @@ class ImpactStability(BaseModel):
     score: float
 
 
+class ShaftPlane(BaseModel):
+    label: str
+    confidence: float
+    angleDeg: Optional[float] = None
+    addressAngleDeg: Optional[float] = None
+    sampleCount: Optional[int] = None
+    comment: Optional[str] = None
+
+
+class Backswing(BaseModel):
+    label: str
+    score: float
+    clubTravelRatio: Optional[float] = None
+    topHeightRatio: Optional[float] = None
+    comment: Optional[str] = None
+
+
+class Readiness(BaseModel):
+    label: str
+    confidence: float
+    readyFrames: int = 0
+    notReadyFrames: int = 0
+
+
+class TrackingQuality(BaseModel):
+    label: str
+    score: float
+    frames: int
+    clubHeadFrames: int = 0
+    clubHandleFrames: int = 0
+    ballFrames: int = 0
+    personFrames: int = 0
+    clubHeadConfidence: Optional[float] = None
+    clubHandleConfidence: Optional[float] = None
+    ballConfidence: Optional[float] = None
+    personConfidence: Optional[float] = None
+
+
+class BallMetric(BaseModel):
+    launchDirection: str = "unknown"
+    launchAngle: Optional[float] = None
+    speedRelative: str = "unknown"
+    confidence: Optional[float] = None
+
+
+class EventTimingMetric(BaseModel):
+    address: Optional[int] = None
+    top: Optional[int] = None
+    impact: Optional[int] = None
+    finish: Optional[int] = None
+
+
 class Metrics(BaseModel):
     swingPlane: SwingPlane
     tempo: Tempo
     impactStability: ImpactStability
+    shaftPlane: Optional[ShaftPlane] = None
+    backswing: Optional[Backswing] = None
+    readiness: Optional[Readiness] = None
+    trackingQuality: Optional[TrackingQuality] = None
+    ball: Optional[BallMetric] = None
+    eventTiming: Optional[EventTimingMetric] = None
 
 
 class ResultMeta(BaseModel):
@@ -76,6 +134,7 @@ class ResultMeta(BaseModel):
     height: Optional[int]
     durationMs: int
     analysisVersion: str
+    modelLabels: Optional[Dict[int, str]] = None
 
 
 class JobResult(BaseModel):
@@ -87,5 +146,7 @@ class JobResult(BaseModel):
     events: Events
     metrics: Optional[Metrics]
     summary: Optional[str]
+    coachSummary: Optional[List[str]] = None
+    confidence: Optional[float] = None
     meta: ResultMeta
     debug: Optional[Dict[str, float]] = None
