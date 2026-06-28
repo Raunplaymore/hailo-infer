@@ -704,7 +704,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
 
     coach_summary = _coach_comments(tempo, shaft, backswing, impact_stability, readiness, tracking)
     summary = f"service7 분석 완료: tempo {ratio}:1, shaft {shaft['label']}, backswing {backswing['label']}."
-    duration_ms = _safe_int(frames[-1].get("_t_ms"), 0) if frames else 0
+    duration_ms = _safe_int(meta.get("durationMs"), 0) or (_safe_int(frames[-1].get("_t_ms"), 0) if frames else 0)
 
     return {
         "ok": True,
