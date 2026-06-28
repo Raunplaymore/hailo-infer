@@ -68,6 +68,14 @@ def _safe_float(value: object, default: float = 0.0) -> float:
     return num if math.isfinite(num) else default
 
 
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        num = int(float(value))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    return num
+
+
 def _normalize_label(value: object) -> str:
     return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
@@ -187,7 +195,7 @@ def _select_best_track(frames: List[dict], labels: Iterable[str]) -> List[dict]:
                 "w": w,
                 "h": h,
                 "t": _safe_float(t_ms, frame_idx * 16.67),
-                "frame": int(frame.get("frame", frame_idx)),
+                "frame": _safe_int(frame.get("frame", frame_idx), frame_idx),
                 "conf": _detection_conf(best),
                 "label": _detection_label(best),
             }
@@ -374,7 +382,7 @@ def _backswing_metric(
 ) -> Dict[str, object]:
     address = motion_track[address_idx]
     top = motion_track[top_idx]
-    person, person_h = _person_height(person_track, int(top["t"]), image_height)
+    person, person_h = _person_height(person_track, _safe_int(top.get("t"), 0), image_height)
 
     pre_top = motion_track[address_idx : top_idx + 1] or [address, top]
     highest_y = min(p["y"] for p in pre_top)
@@ -561,7 +569,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
 
     min_points = 6
     min_conf = 0.15
-    fps = int(meta.get("fps", 60))
+    fps = max(1, _safe_int(meta.get("fps"), 60))
     width = _safe_float(meta.get("width"), 0.0) or None
     height = _safe_float(meta.get("height"), 0.0) or None
     times_ms = _normalize_times(frames, fps)
@@ -610,10 +618,10 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
     if finish_idx <= impact_idx:
         finish_idx = len(motion_track) - 1
 
-    address_ms = int(motion_track[address_idx]["t"])
-    top_ms = int(motion_track[top_idx]["t"])
-    impact_ms = int(motion_track[impact_idx]["t"])
-    finish_ms = int(motion_track[finish_idx]["t"])
+    address_ms = _safe_int(motion_track[address_idx].get("t"), address_idx * (1000 // fps))
+    top_ms = _safe_int(motion_track[top_idx].get("t"), top_idx * (1000 // fps))
+    impact_ms = _safe_int(motion_track[impact_idx].get("t"), impact_idx * (1000 // fps))
+    finish_ms = _safe_int(motion_track[finish_idx].get("t"), finish_idx * (1000 // fps))
 
     dx = motion_track[impact_idx]["x"] - motion_track[top_idx]["x"]
     dy = motion_track[impact_idx]["y"] - motion_track[top_idx]["y"]
@@ -652,7 +660,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
 
     coach_summary = _coach_comments(tempo, shaft, backswing, impact_stability, readiness, tracking)
     summary = f"service7 분석 완료: tempo {ratio}:1, shaft {shaft['label']}, backswing {backswing['label']}."
-    duration_ms = int(frames[-1]["_t_ms"]) if frames else 0
+    duration_ms = _safe_int(frames[-1].get("_t_ms"), 0) if frames else 0
 
     return {
         "ok": True,
