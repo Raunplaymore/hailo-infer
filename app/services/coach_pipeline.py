@@ -18,6 +18,7 @@ BALL_LABELS = {"golf_ball", "golfball", "ball"}
 CLUBHEAD_LABELS = {"club_head", "clubhead", "club_head_center", "golf_club_head"}
 CLUB_LABELS = {"club", "golf_club", "baseball_bat", "bat"}
 HANDLE_LABELS = {"club_handle", "handle", "grip", "club_grip"}
+MOTION_SOURCE_PRIORITY = {"club_head": 0, "club_handle": 1, "club": 2}
 
 
 class CoachError(Exception):
@@ -201,6 +202,50 @@ def _select_best_track(frames: List[dict], labels: Iterable[str]) -> List[dict]:
             }
         )
     return track
+
+
+def _merge_motion_track(named_tracks: List[Tuple[str, List[dict]]]) -> List[dict]:
+    by_frame: Dict[int, dict] = {}
+    for source, track in named_tracks:
+        priority = MOTION_SOURCE_PRIORITY.get(source, 99)
+        for point in track:
+            frame = _safe_int(point.get("frame"), -1)
+            if frame < 0:
+                continue
+            candidate = {**point, "source": source}
+            existing = by_frame.get(frame)
+            if not existing:
+                by_frame[frame] = candidate
+                continue
+            existing_priority = MOTION_SOURCE_PRIORITY.get(existing.get("source", ""), 99)
+            if priority < existing_priority or (priority == existing_priority and candidate.get("conf", 0.0) >= existing.get("conf", 0.0)):
+                by_frame[frame] = candidate
+    merged = list(by_frame.values())
+    merged.sort(key=lambda point: (_safe_int(point.get("frame"), 0), _safe_float(point.get("t"), 0.0)))
+    return merged
+
+
+def _choose_motion_track(club_head_track: List[dict], handle_track: List[dict], club_track: List[dict]) -> Tuple[List[dict], str]:
+    named_tracks: List[Tuple[str, List[dict]]] = []
+    if club_head_track:
+        named_tracks.append(("club_head", club_head_track))
+    if handle_track:
+        named_tracks.append(("club_handle", handle_track))
+    if club_track:
+        named_tracks.append(("club", club_track))
+    if not named_tracks:
+        return [], "club_head"
+
+    hybrid_track = _merge_motion_track(named_tracks)
+    candidates: List[Tuple[str, List[dict]]] = named_tracks + [("hybrid", hybrid_track)]
+
+    def rank(item: Tuple[str, List[dict]]) -> Tuple[int, float, int]:
+        source, track = item
+        preferred = 1 if source != "hybrid" else 0
+        return (len(track), _mean([_safe_float(point.get("conf"), 0.0) for point in track]), preferred)
+
+    source, track = max(candidates, key=rank)
+    return track, source
 
 
 def _label_conf_stats(frames: List[dict], labels: Iterable[str]) -> Tuple[int, float]:
@@ -567,8 +612,8 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
     if not isinstance(frames, list) or not frames:
         raise CoachError("NOT_SWING", "meta frames missing")
 
-    min_points = 6
-    min_conf = 0.15
+    min_points = 4
+    min_conf = 0.12
     fps = max(1, _safe_int(meta.get("fps"), 60))
     width = _safe_float(meta.get("width"), 0.0) or None
     height = _safe_float(meta.get("height"), 0.0) or None
@@ -582,20 +627,19 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
     ball_track = _select_best_track(frames, BALL_LABELS)
     person_track = _select_best_track(frames, PERSON_LABELS)
 
-    motion_track = club_head_track or handle_track or club_track
-    motion_source = "club_head" if club_head_track else "club_handle" if handle_track else "club"
+    motion_track, motion_source = _choose_motion_track(club_head_track, handle_track, club_track)
 
     if len(motion_track) < min_points:
         if not force:
-            raise CoachError("NOT_SWING", "insufficient service7 club detections")
+            raise CoachError("NOT_SWING", f"insufficient service7 club detections (source={motion_source}, motionFrames={len(motion_track)}, clubHeadFrames={len(club_head_track)}, clubHandleFrames={len(handle_track)}, clubFrames={len(club_track)}, personFrames={len(person_track)})")
     confs = [p["conf"] for p in motion_track]
     if confs and _mean(confs) < min_conf and not force:
-        raise CoachError("NOT_SWING", "service7 club detections too weak")
+        raise CoachError("NOT_SWING", f"service7 club detections too weak (source={motion_source}, motionFrames={len(motion_track)}, avgConf={round(_mean(confs), 3)})")
 
     speeds = _speeds(motion_track)
     if not speeds or max(speeds) <= 0:
         if not force:
-            raise CoachError("NOT_SWING", "insufficient motion")
+            raise CoachError("NOT_SWING", f"insufficient motion (source={motion_source}, motionFrames={len(motion_track)})")
 
     impact_idx = _argmax(speeds) if speeds else None
     top_idx = _find_top(motion_track, impact_idx or 0) if impact_idx is not None else None
@@ -604,7 +648,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
 
     if impact_idx is None or top_idx is None or address_idx is None or finish_idx is None:
         if not force:
-            raise CoachError("NOT_SWING", "event segmentation failed")
+            raise CoachError("NOT_SWING", f"event segmentation failed (source={motion_source}, motionFrames={len(motion_track)})")
 
     address_idx = address_idx if address_idx is not None else 0
     top_idx = top_idx if top_idx is not None else min(len(motion_track) - 1, address_idx + 1)
