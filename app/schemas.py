@@ -94,10 +94,12 @@ class TrackingQuality(BaseModel):
     frames: int
     clubHeadFrames: int = 0
     clubHandleFrames: int = 0
+    clubFrames: int = 0
     ballFrames: int = 0
     personFrames: int = 0
     clubHeadConfidence: Optional[float] = None
     clubHandleConfidence: Optional[float] = None
+    clubConfidence: Optional[float] = None
     ballConfidence: Optional[float] = None
     personConfidence: Optional[float] = None
 

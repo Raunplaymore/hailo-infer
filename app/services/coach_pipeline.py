@@ -488,6 +488,7 @@ def _tracking_quality(
     frames: List[dict],
     club_head: List[dict],
     handle: List[dict],
+    club: List[dict],
     ball: List[dict],
     person: List[dict],
 ) -> Dict[str, object]:
@@ -502,8 +503,9 @@ def _tracking_quality(
     quality = (
         coverage(club_head) * 0.45
         + coverage(handle) * 0.2
+        + coverage(club) * 0.1
         + coverage(ball) * 0.15
-        + coverage(person) * 0.2
+        + coverage(person) * 0.1
     )
     if quality >= 0.65:
         label = "good"
@@ -518,10 +520,12 @@ def _tracking_quality(
         "frames": total,
         "clubHeadFrames": len(club_head),
         "clubHandleFrames": len(handle),
+        "clubFrames": len(club),
         "ballFrames": len(ball),
         "personFrames": len(person),
         "clubHeadConfidence": round(avg_conf(club_head), 2),
         "clubHandleConfidence": round(avg_conf(handle), 2),
+        "clubConfidence": round(avg_conf(club), 2),
         "ballConfidence": round(avg_conf(ball), 2),
         "personConfidence": round(avg_conf(person), 2),
     }
@@ -600,6 +604,12 @@ def _coach_comments(
 
     if readiness.get("label") == "not_ready":
         comments.append("어드레스 준비 상태가 불안정하게 감지되었습니다. 분석 시작 프레임을 어드레스 이후로 맞추는 편이 좋습니다.")
+
+    if tracking.get("personFrames", 0) == 0:
+        comments.append("person 검출이 없어 전신 기준 보정이 약합니다. 몸 전체가 화면에 크게 보이도록 거리와 구도를 먼저 조정하세요.")
+
+    if tracking.get("ballFrames", 0) == 0:
+        comments.append("golf_ball 검출이 없어 발사 방향/출발 조건 해석은 현재 신뢰할 수 없습니다.")
 
     if tracking.get("label") == "weak":
         comments.append("추적 품질이 낮습니다. 전신이 프레임 안에 들어오고 클럽 헤드가 배경과 분리되도록 조명과 거리부터 조정하세요.")
@@ -688,7 +698,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
     shaft = _shaft_plane(_shaft_samples(club_head_track, handle_track, fps), address_ms, top_ms, impact_ms)
     backswing = _backswing_metric(motion_track, person_track, address_idx, top_idx, height)
     readiness = _readiness_metric(frames)
-    tracking = _tracking_quality(frames, club_head_track, handle_track, ball_track, person_track)
+    tracking = _tracking_quality(frames, club_head_track, handle_track, club_track, ball_track, person_track)
     ball = _ball_metric(ball_track, impact_ms, width, height)
 
     confidence = round(
