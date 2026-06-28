@@ -11,7 +11,7 @@ SERVICE7_LABELS = {
     6: "club_handle",
 }
 
-PERSON_LABELS = {"person", "player", "golfer"}
+PERSON_LABELS = {"person", "player", "golfer", "player_ready", "player_not_ready", "ready", "not_ready", "player_unready"}
 READY_LABELS = {"player_ready", "ready"}
 NOT_READY_LABELS = {"player_not_ready", "not_ready", "player_unready"}
 BALL_LABELS = {"golf_ball", "golfball", "ball"}
