@@ -2,11 +2,14 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 
 from app.core.config import Settings
 from app.schemas import (
+    BodyVideoRequest,
+    BodyVideoResponse,
     HealthResponse,
     JobCreateRequest,
     JobCreateResponse,
     JobStatusResponse,
 )
+from app.services.body_pipeline import BodyPipelineError, analyze_body_video
 from app.services.coach_pipeline import CoachError, analyze_meta
 from app.services.job_store import JobStore
 from app.services.meta_loader import MetaLoadError, load_meta
@@ -88,6 +91,31 @@ def _run_job(job_id: str, payload: JobCreateRequest) -> None:
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     return HealthResponse(ok=True, version=APP_VERSION, hailoAvailable=settings.hailo_available)
+
+
+@app.post("/v1/body/from-video", response_model=BodyVideoResponse)
+def create_body_artifact(payload: BodyVideoRequest) -> BodyVideoResponse:
+    try:
+        result = analyze_body_video(
+            settings=settings,
+            job_id=payload.jobId,
+            filename=payload.filename,
+            input_path=payload.inputPath,
+            force=payload.force,
+            video_meta=payload.videoMeta.model_dump() if payload.videoMeta else None,
+        )
+        return BodyVideoResponse(**result)
+    except BodyPipelineError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "ok": False,
+                "jobId": payload.jobId,
+                "status": "failed",
+                "errorCode": exc.code,
+                "errorMessage": str(exc),
+            },
+        ) from exc
 
 
 @app.post("/v1/jobs", response_model=JobCreateResponse)

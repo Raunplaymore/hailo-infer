@@ -1,4 +1,4 @@
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -118,6 +118,15 @@ class EventTimingMetric(BaseModel):
     finish: Optional[int] = None
 
 
+class GenericMetricPayload(BaseModel):
+    label: Optional[str] = None
+    confidence: Optional[float] = None
+    score: Optional[float] = None
+    comment: Optional[str] = None
+
+    model_config = {"extra": "allow"}
+
+
 class Metrics(BaseModel):
     swingPlane: SwingPlane
     tempo: Tempo
@@ -128,6 +137,21 @@ class Metrics(BaseModel):
     trackingQuality: Optional[TrackingQuality] = None
     ball: Optional[BallMetric] = None
     eventTiming: Optional[EventTimingMetric] = None
+    body: Optional[Dict[str, GenericMetricPayload]] = None
+    club: Optional[Dict[str, GenericMetricPayload]] = None
+    fusion: Optional[Dict[str, GenericMetricPayload]] = None
+
+
+class ProgressPayload(BaseModel):
+    stage: str
+    stageLabel: Optional[str] = None
+    message: Optional[str] = None
+    analysisPath: Optional[str] = None
+    metaPath: Optional[str] = None
+    bodyPath: Optional[str] = None
+    clubPath: Optional[str] = None
+    fusionPath: Optional[str] = None
+    detail: Optional[Dict[str, Any]] = None
 
 
 class ResultMeta(BaseModel):
@@ -152,3 +176,31 @@ class JobResult(BaseModel):
     confidence: Optional[float] = None
     meta: ResultMeta
     debug: Optional[Dict[str, float]] = None
+    progress: Optional[ProgressPayload] = None
+
+
+class BodyVideoMeta(BaseModel):
+    fps: Optional[float] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    durationMs: Optional[int] = None
+
+
+class BodyVideoRequest(BaseModel):
+    jobId: str
+    filename: str
+    inputPath: str
+    force: bool = False
+    videoMeta: Optional[BodyVideoMeta] = None
+
+
+class BodyVideoResponse(BaseModel):
+    ok: bool
+    jobId: str
+    status: Literal["queued", "running", "succeeded", "failed"]
+    path: Optional[str] = None
+    bodyPath: Optional[str] = None
+    metrics: Optional[Dict[str, GenericMetricPayload]] = None
+    summary: Optional[str] = None
+    errorCode: Optional[str] = None
+    errorMessage: Optional[str] = None

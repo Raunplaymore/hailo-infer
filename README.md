@@ -8,6 +8,7 @@
 - 코칭 지표 산출
 - 분석 결과 JSON 생성
 - `pi_service`는 `INFER_BASE_URL`로 본 서비스를 호출합니다.
+- 업로드 body bootstrap 단계는 `BODY_ANALYZER_BASE_URL`로 같은 서비스의 `/v1/body/from-video`를 호출할 수 있습니다.
 
 `hailo-camera`는 GStreamer + hailonet으로 `.meta.json`을 생성하며,
 본 서비스는 메타 기반 분석(A)을 우선으로 수행합니다.
