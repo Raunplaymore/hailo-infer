@@ -21,6 +21,28 @@ store = JobStore(settings)
 app = FastAPI(title="hailo-infer", version=APP_VERSION)
 
 
+def _is_complete_coach_result(result: dict | None) -> bool:
+    if not isinstance(result, dict):
+        return False
+    if "analysis" in result or "progress" in result:
+        return False
+    if result.get("ok") is not True:
+        return False
+    metrics = result.get("metrics")
+    events = result.get("events")
+    if not isinstance(metrics, dict) or not isinstance(events, dict):
+        return False
+    has_event = any(
+        events.get(key) is not None
+        for key in ("addressMs", "topMs", "impactMs", "finishMs", "address", "top", "impact", "finish")
+    )
+    has_metric = any(
+        metrics.get(key) is not None
+        for key in ("tempo", "swingPlane", "impactStability", "shaftPlane", "backswing", "trackingQuality")
+    )
+    return has_event and has_metric
+
+
 def _run_job(job_id: str, payload: JobCreateRequest) -> None:
     if store.is_canceled(job_id):
         return
@@ -128,7 +150,7 @@ def create_job(payload: JobCreateRequest, background_tasks: BackgroundTasks) -> 
         return JobCreateResponse(ok=True, jobId=payload.jobId, status=existing.status)
 
     cached = store.load_cached_result(payload.jobId)
-    if cached and cached.get("ok") is True and not payload.options.force:
+    if cached and _is_complete_coach_result(cached) and not payload.options.force:
         store.init_job(payload.jobId, payload.mode, "succeeded")
         return JobCreateResponse(ok=True, jobId=payload.jobId, status="succeeded")
 
@@ -142,7 +164,7 @@ def job_status(job_id: str) -> JobStatusResponse:
     info = store.get(job_id)
     if not info:
         cached = store.load_cached_result(job_id)
-        if cached:
+        if _is_complete_coach_result(cached):
             status = "succeeded" if cached.get("ok") is True else "failed"
             return JobStatusResponse(
                 ok=True,
@@ -173,7 +195,7 @@ def cancel(job_id: str) -> JobStatusResponse:
 @app.get("/v1/jobs/{job_id}/result")
 def result(job_id: str) -> dict:
     cached = store.load_cached_result(job_id)
-    if cached:
+    if _is_complete_coach_result(cached):
         return cached
     info = store.get(job_id)
     if not info:
