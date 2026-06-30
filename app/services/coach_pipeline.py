@@ -18,7 +18,7 @@ BALL_LABELS = {"golf_ball", "golfball", "ball"}
 CLUBHEAD_LABELS = {"club_head", "clubhead", "club_head_center", "golf_club_head"}
 CLUB_LABELS = {"club", "golf_club", "baseball_bat", "bat"}
 HANDLE_LABELS = {"club_handle", "handle", "grip", "club_grip"}
-MOTION_SOURCE_PRIORITY = {"club_head": 0, "club_handle": 1, "club": 2}
+MOTION_SOURCE_PRIORITY = {"club_head": 0, "club_handle": 1, "club_box_endpoint": 2, "club": 3}
 
 
 class CoachError(Exception):
@@ -204,6 +204,43 @@ def _select_best_track(frames: List[dict], labels: Iterable[str]) -> List[dict]:
     return track
 
 
+def _club_box_endpoint_track(club_track: List[dict]) -> List[dict]:
+    if not club_track:
+        return []
+
+    candidate_tracks = ([], [])
+    for point in club_track:
+        x = _safe_float(point.get("x"), 0.0)
+        y = _safe_float(point.get("y"), 0.0)
+        w = _safe_float(point.get("w"), 0.0)
+        h = _safe_float(point.get("h"), 0.0)
+        if w >= h:
+            endpoints = ((x - w / 2.0, y), (x + w / 2.0, y))
+        else:
+            endpoints = ((x, y - h / 2.0), (x, y + h / 2.0))
+
+        for idx, (endpoint_x, endpoint_y) in enumerate(endpoints):
+            candidate_tracks[idx].append(
+                {
+                    **point,
+                    "x": endpoint_x,
+                    "y": endpoint_y,
+                    "source": "club_box_endpoint",
+                    "proxySource": "club_box_endpoint",
+                }
+            )
+
+    def endpoint_score(track: List[dict]) -> float:
+        speeds = _speeds(track) if len(track) >= 2 else []
+        xs = [_safe_float(point.get("x"), 0.0) for point in track]
+        ys = [_safe_float(point.get("y"), 0.0) for point in track]
+        x_range = max(xs) - min(xs) if xs else 0.0
+        y_range = max(ys) - min(ys) if ys else 0.0
+        return sum(speeds) + math.hypot(x_range, y_range)
+
+    return max(candidate_tracks, key=endpoint_score)
+
+
 def _merge_motion_track(named_tracks: List[Tuple[str, List[dict]]]) -> List[dict]:
     by_frame: Dict[int, dict] = {}
     for source, track in named_tracks:
@@ -227,10 +264,13 @@ def _merge_motion_track(named_tracks: List[Tuple[str, List[dict]]]) -> List[dict
 
 def _choose_motion_track(club_head_track: List[dict], handle_track: List[dict], club_track: List[dict]) -> Tuple[List[dict], str]:
     named_tracks: List[Tuple[str, List[dict]]] = []
+    club_endpoint_track = _club_box_endpoint_track(club_track)
     if club_head_track:
         named_tracks.append(("club_head", club_head_track))
     if handle_track:
         named_tracks.append(("club_handle", handle_track))
+    if club_endpoint_track:
+        named_tracks.append(("club_box_endpoint", club_endpoint_track))
     if club_track:
         named_tracks.append(("club", club_track))
     if not named_tracks:
@@ -439,10 +479,31 @@ def _shaft_plane(
     }
 
 
-def _person_height(person_track: List[dict], target_ms: int, image_height: Optional[float]) -> Tuple[Optional[dict], float]:
+def _track_uses_normalized_coords(track: List[dict]) -> bool:
+    if not track:
+        return False
+    samples = track[: min(12, len(track))]
+    return all(
+        -0.05 <= _safe_float(point.get("x"), 0.0) <= 1.05
+        and -0.05 <= _safe_float(point.get("y"), 0.0) <= 1.05
+        and 0.0 <= _safe_float(point.get("w"), 0.0) <= 1.05
+        and 0.0 <= _safe_float(point.get("h"), 0.0) <= 1.05
+        for point in samples
+    )
+
+
+def _person_height(
+    person_track: List[dict],
+    target_ms: int,
+    image_height: Optional[float],
+    normalized_coords: bool,
+) -> Tuple[Optional[dict], float]:
     person = _nearest_track_point(person_track, target_ms, None)
     if person:
-        return person, max(1.0, person["h"])
+        min_height = 0.01 if normalized_coords else 1.0
+        return person, max(min_height, person["h"])
+    if normalized_coords:
+        return None, 0.72
     if image_height:
         return None, max(1.0, image_height * 0.72)
     return None, 1.0
@@ -457,7 +518,8 @@ def _backswing_metric(
 ) -> Dict[str, object]:
     address = motion_track[address_idx]
     top = motion_track[top_idx]
-    person, person_h = _person_height(person_track, _safe_int(top.get("t"), 0), image_height)
+    normalized_coords = _track_uses_normalized_coords(motion_track)
+    person, person_h = _person_height(person_track, _safe_int(top.get("t"), 0), image_height, normalized_coords)
 
     pre_top = motion_track[address_idx : top_idx + 1] or [address, top]
     highest_y = min(p["y"] for p in pre_top)
@@ -794,6 +856,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
         },
         "debug": {
             "points": float(len(motion_track)),
+            "motionSource": motion_source,
             "speedMax": float(max(speeds)) if speeds else 0.0,
             "shaftSamples": float(shaft.get("sampleCount") or 0),
             "trackingScore": float(tracking["score"]),
