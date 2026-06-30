@@ -6,6 +6,9 @@ import cv2
 
 from app.core.config import Settings
 
+BODY_SAMPLE_TARGET = 24
+BODY_DETECT_MAX_SIDE = 480
+
 
 class BodyPipelineError(Exception):
     def __init__(self, code: str, message: str) -> None:
@@ -55,7 +58,33 @@ def _normalize_box(box: Tuple[int, int, int, int], width: int, height: int) -> D
 def _sample_stride(frame_count: int) -> int:
     if frame_count <= 0:
         return 1
-    return max(1, frame_count // 48)
+    return max(1, frame_count // BODY_SAMPLE_TARGET)
+
+
+def _resize_for_detection(frame) -> Tuple[Any, float]:
+    height, width = frame.shape[:2]
+    longest_side = max(width, height)
+    if longest_side <= BODY_DETECT_MAX_SIDE:
+        return frame, 1.0
+    scale = BODY_DETECT_MAX_SIDE / float(longest_side)
+    resized = cv2.resize(
+        frame,
+        (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+        interpolation=cv2.INTER_AREA,
+    )
+    return resized, scale
+
+
+def _scale_box(box: Tuple[int, int, int, int], scale: float) -> Tuple[int, int, int, int]:
+    if scale <= 0 or scale == 1.0:
+        return box
+    x, y, w, h = box
+    return (
+        int(round(x / scale)),
+        int(round(y / scale)),
+        int(round(w / scale)),
+        int(round(h / scale)),
+    )
 
 
 def analyze_body_video(
@@ -112,7 +141,8 @@ def analyze_body_video(
                 continue
 
             processed += 1
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            detection_frame, detection_scale = _resize_for_detection(frame)
+            gray = cv2.cvtColor(detection_frame, cv2.COLOR_BGR2GRAY)
             rects, weights = detector.detectMultiScale(
                 gray,
                 winStride=(8, 8),
@@ -123,6 +153,7 @@ def analyze_body_video(
             time_ms = int(round(frame_index * 1000 / fps)) if fps > 0 else None
             if best:
                 box, confidence = best
+                box = _scale_box(box, detection_scale)
                 detected_frames += 1
                 best_conf = max(best_conf, float(confidence))
                 sampled_frames.append(
@@ -169,7 +200,9 @@ def analyze_body_video(
             "height": height or (int(video_meta.get("height")) if video_meta and video_meta.get("height") is not None else None),
             "durationMs": duration_ms or (int(video_meta.get("durationMs")) if video_meta and video_meta.get("durationMs") is not None else 0),
             "sampleStride": stride,
+            "sampleTargetFrames": BODY_SAMPLE_TARGET,
             "sampledFrames": processed,
+            "detectMaxSide": BODY_DETECT_MAX_SIDE,
         },
         "frames": sampled_frames,
         "metrics": {
@@ -195,6 +228,7 @@ def analyze_body_video(
             "processedFrames": processed,
             "detectedFrames": detected_frames,
             "bestConfidence": round(best_conf, 6),
+            "detectMaxSide": BODY_DETECT_MAX_SIDE,
         },
     }
 
