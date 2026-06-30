@@ -366,6 +366,31 @@ def _shaft_samples(head_track: List[dict], handle_track: List[dict], fps: int) -
     return samples
 
 
+def _club_box_shaft_samples(club_track: List[dict]) -> List[dict]:
+    samples: List[dict] = []
+    for point in club_track:
+        w = _safe_float(point.get("w"), 0.0)
+        h = _safe_float(point.get("h"), 0.0)
+        if w <= 1e-6 and h <= 1e-6:
+            continue
+
+        angle = math.degrees(math.atan2(abs(h), abs(w) + 1e-6))
+        # A club bbox is only a coarse proxy for the shaft line, especially when
+        # motion blur or tight crops shrink the box. Keep confidence conservative.
+        confidence = _clamp(_safe_float(point.get("conf"), 0.0) * 0.45)
+        samples.append(
+            {
+                "t": point["t"],
+                "frame": point["frame"],
+                "angleDeg": angle,
+                "length": math.hypot(w, h),
+                "confidence": confidence,
+                "source": "club_box_proxy",
+            }
+        )
+    return samples
+
+
 def _shaft_plane(
     samples: List[dict],
     address_ms: int,
@@ -386,6 +411,7 @@ def _shaft_plane(
     address_sample = _nearest_track_point(samples, address_ms)
     angle = downswing_sample["angleDeg"] if downswing_sample else samples[-1]["angleDeg"]
     address_angle = address_sample["angleDeg"] if address_sample else None
+    source = str((downswing_sample or samples[-1]).get("source") or "head_handle")
 
     if angle >= 62:
         label = "steep"
@@ -397,6 +423,9 @@ def _shaft_plane(
         label = "neutral"
         comment = "다운스윙 샤프트 각도는 단일 카메라 2D 기준에서 중립 범위입니다."
 
+    if source == "club_box_proxy":
+        comment = f"{comment} club_handle 검출이 없어 club bbox 장축으로 근사한 값입니다."
+
     avg_conf = _mean([s["confidence"] for s in samples])
     confidence = _clamp(avg_conf * min(1.0, len(samples) / 8.0))
     return {
@@ -405,6 +434,7 @@ def _shaft_plane(
         "angleDeg": round(angle, 1),
         "addressAngleDeg": round(address_angle, 1) if address_angle is not None else None,
         "sampleCount": len(samples),
+        "source": source,
         "comment": comment,
     }
 
@@ -695,7 +725,10 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
         "score": impact_score,
     }
 
-    shaft = _shaft_plane(_shaft_samples(club_head_track, handle_track, fps), address_ms, top_ms, impact_ms)
+    shaft_samples = _shaft_samples(club_head_track, handle_track, fps)
+    if not shaft_samples:
+        shaft_samples = _club_box_shaft_samples(club_track)
+    shaft = _shaft_plane(shaft_samples, address_ms, top_ms, impact_ms)
     backswing = _backswing_metric(motion_track, person_track, address_idx, top_idx, height)
     readiness = _readiness_metric(frames)
     tracking = _tracking_quality(frames, club_head_track, handle_track, club_track, ball_track, person_track)
