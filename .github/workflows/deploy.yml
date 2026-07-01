@@ -51,6 +51,10 @@ jobs:
       - name: Restart service
         run: |
           ssh "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" "\
+            cd /home/ray/hailo-infer && \
+            python3 -m venv .venv && \
+            .venv/bin/python -m pip install --upgrade pip && \
+            .venv/bin/python -m pip install -r requirements.txt && \
             sudo cp /home/ray/hailo-infer/systemd/hailo-infer-healthcheck.service /etc/systemd/system/ && \
             sudo cp /home/ray/hailo-infer/systemd/hailo-infer-healthcheck.timer /etc/systemd/system/ && \
             sudo systemctl daemon-reload && \
