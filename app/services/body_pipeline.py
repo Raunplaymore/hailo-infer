@@ -7,6 +7,7 @@ import cv2
 from app.core.config import Settings
 
 BODY_SAMPLE_TARGET = 24
+BODY_FULL_SAMPLE_MAX_FRAMES = 120
 BODY_DETECT_MAX_SIDE = 480
 POSE_DETECT_MAX_SIDE = 768
 
@@ -89,6 +90,8 @@ def _normalize_box(box: Tuple[int, int, int, int], width: int, height: int) -> D
 
 def _sample_stride(frame_count: int) -> int:
     if frame_count <= 0:
+        return 1
+    if frame_count <= BODY_FULL_SAMPLE_MAX_FRAMES:
         return 1
     return max(1, frame_count // BODY_SAMPLE_TARGET)
 

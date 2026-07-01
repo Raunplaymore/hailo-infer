@@ -458,9 +458,41 @@ def _find_top_from_wrist_track(wrist_track: List[dict], address_time_ms: float) 
     ]
     if len(search) < 3:
         search = wrist_track
-    search_end = max(1, min(len(search) - 1, int(len(search) * 0.75)))
-    candidates = search[: search_end + 1]
-    return min(candidates, key=lambda point: (_safe_float(point.get("y"), 1.0), -_safe_float(point.get("conf"), 0.0)))
+    address = search[0]
+    last_t = _safe_float(search[-1].get("t"), address_time_ms)
+    duration = max(1.0, last_t - address_time_ms)
+    window_start_ms = address_time_ms + min(120.0, duration * 0.12)
+    window_end_ms = address_time_ms + min(520.0, duration * 0.48)
+    candidates = [
+        point
+        for point in search
+        if window_start_ms <= _safe_float(point.get("t"), 0.0) <= window_end_ms
+    ]
+    if len(candidates) < 3:
+        fallback_end = max(2, min(len(search) - 1, int(len(search) * 0.45)))
+        candidates = search[1 : fallback_end + 1]
+    if not candidates:
+        return None
+
+    xs = [_safe_float(point.get("x"), 0.0) for point in wrist_track]
+    ys = [_safe_float(point.get("y"), 0.0) for point in wrist_track]
+    scale = max(1e-6, max(xs) - min(xs), max(ys) - min(ys))
+    target_ms = address_time_ms + min(330.0, duration * 0.32)
+    best = candidates[0]
+    best_score = float("-inf")
+    for point in candidates:
+        height_gain = max(0.0, _safe_float(address.get("y"), 0.0) - _safe_float(point.get("y"), 0.0)) / scale
+        displacement = math.hypot(
+            _safe_float(point.get("x"), 0.0) - _safe_float(address.get("x"), 0.0),
+            _safe_float(point.get("y"), 0.0) - _safe_float(address.get("y"), 0.0),
+        ) / scale
+        time_score = 1.0 - min(1.0, abs(_safe_float(point.get("t"), 0.0) - target_ms) / 220.0)
+        conf_score = _safe_float(point.get("conf"), 0.0)
+        score = height_gain * 0.42 + displacement * 0.2 + max(0.0, time_score) * 0.28 + conf_score * 0.1
+        if score > best_score:
+            best_score = score
+            best = point
+    return best
 
 
 def _find_impact_after_top(track: List[dict], speeds: List[float], address_idx: int, top_idx: int) -> Optional[int]:
