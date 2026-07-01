@@ -312,6 +312,124 @@ def _speeds(track: List[dict]) -> List[float]:
     return speeds
 
 
+def _coord_scale(track: List[dict]) -> float:
+    if not track:
+        return 1.0
+    xs = [_safe_float(point.get("x"), 0.0) for point in track]
+    ys = [_safe_float(point.get("y"), 0.0) for point in track]
+    return max(1e-6, max(xs) - min(xs), max(ys) - min(ys))
+
+
+def _smooth_speeds(speeds: List[float]) -> List[float]:
+    if not speeds:
+        return []
+    smoothed: List[float] = []
+    for idx in range(len(speeds)):
+        start = max(0, idx - 1)
+        end = min(len(speeds), idx + 2)
+        smoothed.append(_mean(speeds[start:end]))
+    return smoothed
+
+
+def _find_address_index(track: List[dict], speeds: List[float]) -> Optional[int]:
+    if not track or not speeds:
+        return None
+    search_end = max(1, min(len(track) - 1, max(3, len(track) // 5)))
+    speed_ref = max(_median(speeds), _mean(speeds) * 0.35, 1e-6)
+    best_idx = 0
+    best_score = float("-inf")
+    for idx in range(0, search_end + 1):
+        speed_score = 1.0 - min(1.0, speeds[idx] / (speed_ref * 2.5))
+        early_score = 1.0 - idx / max(1, search_end)
+        conf_score = _safe_float(track[idx].get("conf"), 0.0)
+        score = speed_score * 0.55 + early_score * 0.25 + conf_score * 0.2
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+    return best_idx
+
+
+def _find_top_after_address(track: List[dict], address_idx: int) -> Optional[int]:
+    if len(track) < 3:
+        return None
+    search_start = min(len(track) - 2, max(0, address_idx + 1))
+    search_end = max(search_start + 1, min(len(track) - 2, int(len(track) * 0.55)))
+    address = track[address_idx]
+    scale = _coord_scale(track)
+    best_idx = search_start
+    best_score = float("-inf")
+    for idx in range(search_start, search_end + 1):
+        point = track[idx]
+        height_gain = max(0.0, address["y"] - point["y"]) / scale
+        displacement = math.hypot(point["x"] - address["x"], point["y"] - address["y"]) / scale
+        time_score = 1.0 - abs((idx / max(1, len(track) - 1)) - 0.28) / 0.28
+        score = height_gain * 0.55 + displacement * 0.3 + max(0.0, time_score) * 0.15
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+    return best_idx
+
+
+def _find_impact_after_top(track: List[dict], speeds: List[float], address_idx: int, top_idx: int) -> Optional[int]:
+    if len(track) < 3:
+        return None
+    search_start = min(len(track) - 1, max(top_idx + 1, top_idx + max(1, (len(track) - top_idx) // 12)))
+    search_end = max(search_start, min(len(track) - 1, int(len(track) * 0.78)))
+    address = track[address_idx]
+    top = track[top_idx]
+    scale = _coord_scale(track)
+    max_speed = max(speeds) if speeds else 1.0
+    best_idx = search_start
+    best_score = float("-inf")
+    for idx in range(search_start, search_end + 1):
+        point = track[idx]
+        speed_score = speeds[idx] / max(max_speed, 1e-6)
+        address_y_score = 1.0 - min(1.0, abs(point["y"] - address["y"]) / scale)
+        address_dist_score = 1.0 - min(1.0, math.hypot(point["x"] - address["x"], point["y"] - address["y"]) / (scale * 1.35))
+        descent = max(0.0, point["y"] - top["y"]) / scale
+        time_score = 1.0 - abs((idx / max(1, len(track) - 1)) - 0.48) / 0.35
+        score = (
+            speed_score * 0.38
+            + address_y_score * 0.24
+            + address_dist_score * 0.16
+            + descent * 0.14
+            + max(0.0, time_score) * 0.08
+        )
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+    return best_idx
+
+
+def _find_finish_after_impact(track: List[dict], speeds: List[float], impact_idx: int) -> Optional[int]:
+    if len(track) < 2:
+        return None
+    search_start = min(len(track) - 1, max(impact_idx + 1, int(len(track) * 0.6)))
+    if search_start >= len(track) - 1:
+        return len(track) - 1
+    speed_ref = max(_median(speeds), _mean(speeds) * 0.45, 1e-6)
+    tail = list(range(search_start, len(track)))
+    slow = [idx for idx in tail if speeds[idx] <= speed_ref * 1.25]
+    return slow[-1] if slow else tail[-1]
+
+
+def _segment_events(track: List[dict], speeds: List[float]) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int], str]:
+    if not track or not speeds:
+        return None, None, None, None, "empty"
+    smoothed = _smooth_speeds(speeds)
+    address_idx = _find_address_index(track, smoothed)
+    if address_idx is None:
+        return None, None, None, None, "empty"
+    top_idx = _find_top_after_address(track, address_idx)
+    if top_idx is None:
+        return address_idx, None, None, None, "no_top"
+    impact_idx = _find_impact_after_top(track, smoothed, address_idx, top_idx)
+    if impact_idx is None:
+        return address_idx, top_idx, None, None, "no_impact"
+    finish_idx = _find_finish_after_impact(track, smoothed, impact_idx)
+    return address_idx, top_idx, impact_idx, finish_idx, "trajectory_score"
+
+
 def _find_stable_index(speeds: List[float], start: int, direction: int) -> Optional[int]:
     if not speeds:
         return None
@@ -743,10 +861,16 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
         if not force:
             raise CoachError("NOT_SWING", f"insufficient motion (source={motion_source}, motionFrames={len(motion_track)})")
 
-    impact_idx = _argmax(speeds) if speeds else None
-    top_idx = _find_top(motion_track, impact_idx or 0) if impact_idx is not None else None
-    address_idx = _find_stable_index(speeds, 0, 1)
-    finish_idx = _find_stable_index(speeds, len(speeds) - 1, -1)
+    address_idx, top_idx, impact_idx, finish_idx, event_source = _segment_events(motion_track, speeds)
+    if impact_idx is None:
+        impact_idx = _argmax(speeds) if speeds else None
+        event_source = "speed_fallback"
+    if top_idx is None and impact_idx is not None:
+        top_idx = _find_top(motion_track, impact_idx or 0)
+    if address_idx is None:
+        address_idx = _find_stable_index(speeds, 0, 1)
+    if finish_idx is None:
+        finish_idx = _find_stable_index(speeds, len(speeds) - 1, -1)
 
     if impact_idx is None or top_idx is None or address_idx is None or finish_idx is None:
         if not force:
@@ -857,6 +981,13 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
         "debug": {
             "points": float(len(motion_track)),
             "motionSource": motion_source,
+            "eventSource": event_source,
+            "eventIndices": {
+                "address": int(address_idx),
+                "top": int(top_idx),
+                "impact": int(impact_idx),
+                "finish": int(finish_idx),
+            },
             "speedMax": float(max(speeds)) if speeds else 0.0,
             "shaftSamples": float(shaft.get("sampleCount") or 0),
             "trackingScore": float(tracking["score"]),
