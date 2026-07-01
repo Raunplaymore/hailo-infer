@@ -50,7 +50,12 @@ def _run_job(job_id: str, payload: JobCreateRequest) -> None:
     try:
         if payload.mode == "coach_from_meta":
             meta = load_meta(payload.source.metaPath)
-            result = analyze_meta(meta, job_id=job_id, force=payload.options.force)
+            result = analyze_meta(
+                meta,
+                job_id=job_id,
+                force=payload.options.force,
+                body_path=payload.source.bodyPath,
+            )
         else:
             raise CoachError("MODE_DISABLED", "infer_meta_from_video disabled on this host")
         store.save_result(job_id, result)

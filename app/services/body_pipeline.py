@@ -8,6 +8,23 @@ from app.core.config import Settings
 
 BODY_SAMPLE_TARGET = 24
 BODY_DETECT_MAX_SIDE = 480
+POSE_DETECT_MAX_SIDE = 768
+
+POSE_KEYPOINTS = {
+    "nose": 0,
+    "left_shoulder": 11,
+    "right_shoulder": 12,
+    "left_elbow": 13,
+    "right_elbow": 14,
+    "left_wrist": 15,
+    "right_wrist": 16,
+    "left_hip": 23,
+    "right_hip": 24,
+    "left_knee": 25,
+    "right_knee": 26,
+    "left_ankle": 27,
+    "right_ankle": 28,
+}
 
 
 class BodyPipelineError(Exception):
@@ -28,6 +45,21 @@ def _create_detector() -> cv2.HOGDescriptor:
     detector = cv2.HOGDescriptor()
     detector.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
     return detector
+
+
+def _create_pose_detector():
+    try:
+        import mediapipe as mp  # type: ignore
+    except Exception:
+        return None
+
+    return mp.solutions.pose.Pose(
+        static_image_mode=False,
+        model_complexity=1,
+        enable_segmentation=False,
+        min_detection_confidence=0.35,
+        min_tracking_confidence=0.35,
+    )
 
 
 def _pick_best_detection(rects, weights) -> Optional[Tuple[Tuple[int, int, int, int], float]]:
@@ -73,6 +105,46 @@ def _resize_for_detection(frame) -> Tuple[Any, float]:
         interpolation=cv2.INTER_AREA,
     )
     return resized, scale
+
+
+def _resize_for_pose(frame) -> Any:
+    height, width = frame.shape[:2]
+    longest_side = max(width, height)
+    if longest_side <= POSE_DETECT_MAX_SIDE:
+        return frame
+    scale = POSE_DETECT_MAX_SIDE / float(longest_side)
+    return cv2.resize(
+        frame,
+        (max(1, int(round(width * scale))), max(1, int(round(height * scale)))),
+        interpolation=cv2.INTER_AREA,
+    )
+
+
+def _extract_pose_keypoints(pose_detector, frame) -> Optional[Dict[str, List[float]]]:
+    if pose_detector is None:
+        return None
+    pose_frame = _resize_for_pose(frame)
+    rgb = cv2.cvtColor(pose_frame, cv2.COLOR_BGR2RGB)
+    try:
+        result = pose_detector.process(rgb)
+    except Exception:
+        return None
+    landmarks = getattr(result, "pose_landmarks", None)
+    if not landmarks:
+        return None
+
+    keypoints: Dict[str, List[float]] = {}
+    for name, idx in POSE_KEYPOINTS.items():
+        if idx >= len(landmarks.landmark):
+            continue
+        landmark = landmarks.landmark[idx]
+        visibility = float(getattr(landmark, "visibility", 0.0) or 0.0)
+        keypoints[name] = [
+            round(float(landmark.x), 6),
+            round(float(landmark.y), 6),
+            round(visibility, 6),
+        ]
+    return keypoints or None
 
 
 def _scale_box(box: Tuple[int, int, int, int], scale: float) -> Tuple[int, int, int, int]:
@@ -124,9 +196,12 @@ def analyze_body_video(
     duration_ms = int(round(frame_count * 1000 / fps)) if fps > 0 and frame_count > 0 else 0
     stride = _sample_stride(frame_count)
     detector = _create_detector()
+    pose_detector = _create_pose_detector()
 
     sampled_frames: List[Dict[str, Any]] = []
     detected_frames = 0
+    pose_frames = 0
+    wrist_frames = 0
     best_conf = 0.0
     processed = 0
     frame_index = 0
@@ -141,6 +216,13 @@ def analyze_body_video(
                 continue
 
             processed += 1
+            keypoints = _extract_pose_keypoints(pose_detector, frame)
+            if keypoints:
+                pose_frames += 1
+                left_wrist = keypoints.get("left_wrist")
+                right_wrist = keypoints.get("right_wrist")
+                if (left_wrist and left_wrist[2] >= 0.25) or (right_wrist and right_wrist[2] >= 0.25):
+                    wrist_frames += 1
             detection_frame, detection_scale = _resize_for_detection(frame)
             gray = cv2.cvtColor(detection_frame, cv2.COLOR_BGR2GRAY)
             rects, weights = detector.detectMultiScale(
@@ -164,6 +246,7 @@ def analyze_body_video(
                             **_normalize_box(box, width, height),
                             "confidence": round(float(confidence), 6),
                         },
+                        "keypoints": keypoints,
                     }
                 )
             else:
@@ -172,13 +255,18 @@ def analyze_body_video(
                         "frameIndex": frame_index,
                         "timeMs": time_ms,
                         "personBox": None,
+                        "keypoints": keypoints,
                     }
                 )
             frame_index += 1
     finally:
         capture.release()
+        if pose_detector is not None:
+            pose_detector.close()
 
     coverage = float(detected_frames / processed) if processed > 0 else 0.0
+    pose_coverage = float(pose_frames / processed) if processed > 0 else 0.0
+    wrist_coverage = float(wrist_frames / processed) if processed > 0 else 0.0
     label = "available" if detected_frames > 0 else "missing"
     summary = (
         f"body bootstrap complete: sampled {processed} frames, "
@@ -203,6 +291,8 @@ def analyze_body_video(
             "sampleTargetFrames": BODY_SAMPLE_TARGET,
             "sampledFrames": processed,
             "detectMaxSide": BODY_DETECT_MAX_SIDE,
+            "poseMaxSide": POSE_DETECT_MAX_SIDE,
+            "poseAvailable": pose_detector is not None,
         },
         "frames": sampled_frames,
         "metrics": {
@@ -221,12 +311,29 @@ def analyze_body_video(
                 "detectedFrames": detected_frames,
                 "sampledFrames": processed,
             },
+            "poseCoverage": {
+                "label": "available" if pose_frames > 0 else "missing",
+                "score": round(pose_coverage, 6),
+                "confidence": round(pose_coverage, 6),
+                "detectedFrames": pose_frames,
+                "sampledFrames": processed,
+            },
+            "wristCoverage": {
+                "label": "available" if wrist_frames > 0 else "missing",
+                "score": round(wrist_coverage, 6),
+                "confidence": round(wrist_coverage, 6),
+                "detectedFrames": wrist_frames,
+                "sampledFrames": processed,
+            },
         },
         "summary": summary,
         "debug": {
             "frameCount": frame_count,
             "processedFrames": processed,
             "detectedFrames": detected_frames,
+            "poseFrames": pose_frames,
+            "wristFrames": wrist_frames,
+            "poseAvailable": pose_detector is not None,
             "bestConfidence": round(best_conf, 6),
             "detectMaxSide": BODY_DETECT_MAX_SIDE,
         },

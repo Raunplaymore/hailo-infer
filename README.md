@@ -56,7 +56,8 @@ systemd 헬스체크 타이머가 이 엔드포인트를 주기적으로 확인�
   "source": {
     "filename": "session_YYYY.mp4",
     "videoPath": "/home/ray/uploads/session_YYYY.mp4",
-    "metaPath": "/tmp/session_YYYY.meta.json"
+    "metaPath": "/tmp/session_YYYY.meta.json",
+    "bodyPath": "/home/ray/data/body/session_YYYY.json"
   },
   "options": {
     "force": false,
@@ -64,6 +65,10 @@ systemd 헬스체크 타이머가 이 엔드포인트를 주기적으로 확인�
   }
 }
 ```
+
+`bodyPath`가 있으면 body artifact의 pose wrist keypoints를 top 이벤트 산정에 우선 사용합니다.
+`mediapipe`를 사용할 수 없는 환경에서는 기존 OpenCV HOG body bootstrap만 생성되고, 이벤트는 club
+trajectory fallback으로 계산됩니다.
 
 ### 상태/취소/결과
 

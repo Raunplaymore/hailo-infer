@@ -1,5 +1,8 @@
+import json
 import math
-from typing import Dict, Iterable, List, Optional, Tuple
+import os
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 SERVICE7_LABELS = {
     0: "person",
@@ -19,6 +22,7 @@ CLUBHEAD_LABELS = {"club_head", "clubhead", "club_head_center", "golf_club_head"
 CLUB_LABELS = {"club", "golf_club", "baseball_bat", "bat"}
 HANDLE_LABELS = {"club_handle", "handle", "grip", "club_grip"}
 MOTION_SOURCE_PRIORITY = {"club_head": 0, "club_handle": 1, "club_box_endpoint": 2, "club": 3}
+WRIST_CONFIDENCE_MIN = 0.25
 
 
 class CoachError(Exception):
@@ -331,6 +335,80 @@ def _smooth_speeds(speeds: List[float]) -> List[float]:
     return smoothed
 
 
+def _load_body_artifact(job_id: str, body_path: Optional[str]) -> Optional[Dict[str, Any]]:
+    candidates: List[Path] = []
+    if body_path:
+        candidates.append(Path(body_path))
+    data_dir = Path(os.getenv("DATA_DIR", "/home/ray/data"))
+    candidates.append(data_dir / "body" / f"{job_id}.json")
+    for path in candidates:
+        if not path.exists():
+            continue
+        try:
+            payload = json.loads(path.read_text())
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def _keypoint_xyc(frame: dict, name: str) -> Optional[Tuple[float, float, float]]:
+    keypoints = frame.get("keypoints")
+    if not isinstance(keypoints, dict):
+        return None
+    raw = keypoints.get(name)
+    if not isinstance(raw, list) or len(raw) < 2:
+        return None
+    conf = _safe_float(raw[2], 0.0) if len(raw) >= 3 else 1.0
+    return _safe_float(raw[0], 0.0), _safe_float(raw[1], 0.0), conf
+
+
+def _wrist_track_from_body(body: Optional[Dict[str, Any]]) -> List[dict]:
+    frames = body.get("frames") if isinstance(body, dict) else None
+    if not isinstance(frames, list):
+        return []
+    track: List[dict] = []
+    for idx, frame in enumerate(frames):
+        if not isinstance(frame, dict):
+            continue
+        wrists = [
+            point
+            for point in (
+                _keypoint_xyc(frame, "left_wrist"),
+                _keypoint_xyc(frame, "right_wrist"),
+            )
+            if point is not None and point[2] >= WRIST_CONFIDENCE_MIN
+        ]
+        if not wrists:
+            continue
+        # Golf grip keeps both hands close; midpoint is stabler than either wrist alone.
+        x = _mean([point[0] for point in wrists])
+        y = _mean([point[1] for point in wrists])
+        conf = _mean([point[2] for point in wrists])
+        track.append(
+            {
+                "x": x,
+                "y": y,
+                "t": _safe_float(frame.get("timeMs"), idx * 33.33),
+                "frame": _safe_int(frame.get("frameIndex"), idx),
+                "conf": conf,
+                "source": "pose_wrist",
+            }
+        )
+    track.sort(key=lambda point: (_safe_int(point.get("frame"), 0), _safe_float(point.get("t"), 0.0)))
+    return track
+
+
+def _nearest_track_index_by_time(track: List[dict], time_ms: float) -> Optional[int]:
+    if not track:
+        return None
+    return min(
+        range(len(track)),
+        key=lambda idx: abs(_safe_float(track[idx].get("t"), 0.0) - time_ms),
+    )
+
+
 def _find_address_index(track: List[dict], speeds: List[float]) -> Optional[int]:
     if not track or not speeds:
         return None
@@ -368,6 +446,21 @@ def _find_top_after_address(track: List[dict], address_idx: int) -> Optional[int
             best_score = score
             best_idx = idx
     return best_idx
+
+
+def _find_top_from_wrist_track(wrist_track: List[dict], address_time_ms: float) -> Optional[dict]:
+    if len(wrist_track) < 3:
+        return None
+    search = [
+        point
+        for point in wrist_track
+        if _safe_float(point.get("t"), 0.0) >= address_time_ms
+    ]
+    if len(search) < 3:
+        search = wrist_track
+    search_end = max(1, min(len(search) - 1, int(len(search) * 0.75)))
+    candidates = search[: search_end + 1]
+    return min(candidates, key=lambda point: (_safe_float(point.get("y"), 1.0), -_safe_float(point.get("conf"), 0.0)))
 
 
 def _find_impact_after_top(track: List[dict], speeds: List[float], address_idx: int, top_idx: int) -> Optional[int]:
@@ -446,21 +539,30 @@ def _find_finish_after_impact(track: List[dict], speeds: List[float], impact_idx
     return best_idx
 
 
-def _segment_events(track: List[dict], speeds: List[float]) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int], str]:
+def _segment_events(
+    track: List[dict],
+    speeds: List[float],
+    wrist_track: Optional[List[dict]] = None,
+) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int], str, Optional[dict]]:
     if not track or not speeds:
-        return None, None, None, None, "empty"
+        return None, None, None, None, "empty", None
     smoothed = _smooth_speeds(speeds)
     address_idx = _find_address_index(track, smoothed)
     if address_idx is None:
-        return None, None, None, None, "empty"
-    top_idx = _find_top_after_address(track, address_idx)
+        return None, None, None, None, "empty", None
+    address_time_ms = _safe_float(track[address_idx].get("t"), 0.0)
+    wrist_top = _find_top_from_wrist_track(wrist_track or [], address_time_ms)
+    top_idx = _nearest_track_index_by_time(track, _safe_float(wrist_top.get("t"), 0.0)) if wrist_top else None
+    event_source = "pose_wrist_top" if top_idx is not None else "trajectory_score"
     if top_idx is None:
-        return address_idx, None, None, None, "no_top"
+        top_idx = _find_top_after_address(track, address_idx)
+    if top_idx is None:
+        return address_idx, None, None, None, "no_top", wrist_top
     impact_idx = _find_impact_after_top(track, smoothed, address_idx, top_idx)
     if impact_idx is None:
-        return address_idx, top_idx, None, None, "no_impact"
+        return address_idx, top_idx, None, None, "no_impact", wrist_top
     finish_idx = _find_finish_after_impact(track, smoothed, impact_idx)
-    return address_idx, top_idx, impact_idx, finish_idx, "trajectory_score"
+    return address_idx, top_idx, impact_idx, finish_idx, event_source, wrist_top
 
 
 def _find_stable_index(speeds: List[float], start: int, direction: int) -> Optional[int]:
@@ -860,7 +962,7 @@ def _coach_comments(
     return comments[:6]
 
 
-def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str, object]:
+def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: Optional[str] = None) -> Dict[str, object]:
     frames = meta.get("frames", [])
     if not isinstance(frames, list) or not frames:
         raise CoachError("NOT_SWING", "meta frames missing")
@@ -879,6 +981,8 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
     club_track = _select_best_track(frames, CLUB_LABELS)
     ball_track = _select_best_track(frames, BALL_LABELS)
     person_track = _select_best_track(frames, PERSON_LABELS)
+    body_artifact = _load_body_artifact(job_id, body_path)
+    wrist_track = _wrist_track_from_body(body_artifact)
 
     motion_track, motion_source = _choose_motion_track(club_head_track, handle_track, club_track)
 
@@ -894,7 +998,11 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
         if not force:
             raise CoachError("NOT_SWING", f"insufficient motion (source={motion_source}, motionFrames={len(motion_track)})")
 
-    address_idx, top_idx, impact_idx, finish_idx, event_source = _segment_events(motion_track, speeds)
+    address_idx, top_idx, impact_idx, finish_idx, event_source, wrist_top = _segment_events(
+        motion_track,
+        speeds,
+        wrist_track,
+    )
     if impact_idx is None:
         impact_idx = _argmax(speeds) if speeds else None
         event_source = "speed_fallback"
@@ -1015,6 +1123,8 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool) -> Dict[str,
             "points": float(len(motion_track)),
             "motionSource": motion_source,
             "eventSource": event_source,
+            "wristPoints": float(len(wrist_track)),
+            "wristTopMs": float(wrist_top.get("t")) if wrist_top else None,
             "eventIndices": {
                 "address": int(address_idx),
                 "top": int(top_idx),

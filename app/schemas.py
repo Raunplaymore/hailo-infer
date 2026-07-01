@@ -7,6 +7,7 @@ class Source(BaseModel):
     filename: str
     videoPath: str
     metaPath: str
+    bodyPath: Optional[str] = None
 
 
 class JobOptions(BaseModel):
@@ -175,7 +176,7 @@ class JobResult(BaseModel):
     coachSummary: Optional[List[str]] = None
     confidence: Optional[float] = None
     meta: ResultMeta
-    debug: Optional[Dict[str, float]] = None
+    debug: Optional[Dict[str, Any]] = None
     progress: Optional[ProgressPayload] = None
 
 
