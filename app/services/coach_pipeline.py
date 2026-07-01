@@ -373,32 +373,38 @@ def _find_top_after_address(track: List[dict], address_idx: int) -> Optional[int
 def _find_impact_after_top(track: List[dict], speeds: List[float], address_idx: int, top_idx: int) -> Optional[int]:
     if len(track) < 3:
         return None
-    search_start = min(len(track) - 1, max(top_idx + 1, int(len(track) * 0.48)))
-    search_end = max(search_start, min(len(track) - 1, int(len(track) * 0.92)))
+    top_t = _safe_float(track[top_idx].get("t"), 0.0)
+    window_start_ms = top_t + 150.0
+    window_end_ms = top_t + 380.0
+    candidates = [
+        idx
+        for idx in range(top_idx + 1, len(track))
+        if window_start_ms <= _safe_float(track[idx].get("t"), 0.0) <= window_end_ms
+    ]
+    if not candidates:
+        search_start = min(len(track) - 1, max(top_idx + 1, int(len(track) * 0.45)))
+        search_end = max(search_start, min(len(track) - 1, int(len(track) * 0.72)))
+        candidates = list(range(search_start, search_end + 1))
     address = track[address_idx]
     top = track[top_idx]
     scale = _coord_scale(track)
     max_speed = max(speeds) if speeds else 1.0
-    max_y = max(_safe_float(point.get("y"), 0.0) for point in track[search_start : search_end + 1])
-    min_y = min(_safe_float(point.get("y"), 0.0) for point in track)
-    y_range = max(1e-6, max_y - min_y)
-    best_idx = search_start
+    target_ms = top_t + 250.0
+    best_idx = candidates[0]
     best_score = float("-inf")
-    for idx in range(search_start, search_end + 1):
+    for idx in candidates:
         point = track[idx]
         speed_score = speeds[idx] / max(max_speed, 1e-6)
         address_y_score = 1.0 - min(1.0, abs(point["y"] - address["y"]) / scale)
         address_dist_score = 1.0 - min(1.0, math.hypot(point["x"] - address["x"], point["y"] - address["y"]) / (scale * 1.35))
         descent = max(0.0, point["y"] - top["y"]) / scale
-        low_point_score = max(0.0, (point["y"] - min_y) / y_range)
-        time_score = 1.0 - abs((idx / max(1, len(track) - 1)) - 0.68) / 0.28
+        time_score = 1.0 - min(1.0, abs(_safe_float(point.get("t"), 0.0) - target_ms) / 180.0)
         score = (
-            low_point_score * 0.34
-            + descent * 0.26
-            + speed_score * 0.18
-            + address_y_score * 0.1
-            + address_dist_score * 0.06
-            + max(0.0, time_score) * 0.06
+            speed_score * 0.34
+            + address_y_score * 0.22
+            + address_dist_score * 0.18
+            + descent * 0.16
+            + max(0.0, time_score) * 0.1
         )
         if score > best_score:
             best_score = score
@@ -409,13 +415,35 @@ def _find_impact_after_top(track: List[dict], speeds: List[float], address_idx: 
 def _find_finish_after_impact(track: List[dict], speeds: List[float], impact_idx: int) -> Optional[int]:
     if len(track) < 2:
         return None
-    search_start = min(len(track) - 1, max(impact_idx + 1, int(len(track) * 0.6)))
-    if search_start >= len(track) - 1:
-        return len(track) - 1
-    speed_ref = max(_median(speeds), _mean(speeds) * 0.45, 1e-6)
-    tail = list(range(search_start, len(track)))
-    slow = [idx for idx in tail if speeds[idx] <= speed_ref * 1.25]
-    return slow[-1] if slow else tail[-1]
+    impact_t = _safe_float(track[impact_idx].get("t"), 0.0)
+    window_start_ms = impact_t + 100.0
+    window_end_ms = impact_t + 380.0
+    candidates = [
+        idx
+        for idx in range(impact_idx + 1, len(track))
+        if window_start_ms <= _safe_float(track[idx].get("t"), 0.0) <= window_end_ms
+    ]
+    if not candidates:
+        search_start = min(len(track) - 1, max(impact_idx + 1, int(len(track) * 0.58)))
+        search_end = max(search_start, min(len(track) - 1, int(len(track) * 0.82)))
+        candidates = list(range(search_start, search_end + 1))
+    address = track[0]
+    impact = track[impact_idx]
+    scale = _coord_scale(track)
+    target_ms = impact_t + 210.0
+    best_idx = candidates[0]
+    best_score = float("-inf")
+    for idx in candidates:
+        point = track[idx]
+        displacement = math.hypot(point["x"] - address["x"], point["y"] - address["y"]) / scale
+        post_impact_move = math.hypot(point["x"] - impact["x"], point["y"] - impact["y"]) / scale
+        height_gain = max(0.0, impact["y"] - point["y"]) / scale
+        time_score = 1.0 - min(1.0, abs(_safe_float(point.get("t"), 0.0) - target_ms) / 220.0)
+        score = displacement * 0.34 + post_impact_move * 0.26 + height_gain * 0.22 + max(0.0, time_score) * 0.18
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+    return best_idx
 
 
 def _segment_events(track: List[dict], speeds: List[float]) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int], str]:
