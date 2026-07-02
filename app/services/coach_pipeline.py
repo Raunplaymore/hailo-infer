@@ -534,6 +534,8 @@ def _find_top_from_wrist_track(wrist_track: List[dict], address_time_ms: float) 
         candidate_metrics.append(
             {
                 "point": point,
+                "t": point_t,
+                "y": point_y,
                 "heightGain": height_gain,
                 "displacement": displacement,
                 "futureDrop": future_drop,
@@ -543,10 +545,41 @@ def _find_top_from_wrist_track(wrist_track: List[dict], address_time_ms: float) 
         )
 
     max_height_gain = max((metric["heightGain"] for metric in candidate_metrics), default=0.0)
+    min_peak_gain = max(0.08, max_height_gain * 0.35)
+    best_rise_metric: Optional[Dict[str, Any]] = None
+    for metric in sorted(candidate_metrics, key=lambda item: _safe_float(item.get("t"), 0.0)):
+        if metric["heightGain"] >= min_peak_gain:
+            if best_rise_metric is None:
+                best_rise_metric = metric
+            else:
+                metric_t = _safe_float(metric.get("t"), 0.0)
+                best_t = _safe_float(best_rise_metric.get("t"), 0.0)
+                near_peak_plateau = (
+                    metric_t <= best_t + 120.0
+                    and metric["heightGain"] >= best_rise_metric["heightGain"] * 0.94
+                )
+                if metric["heightGain"] > best_rise_metric["heightGain"] or near_peak_plateau:
+                    best_rise_metric = metric
+        if best_rise_metric is None:
+            continue
+        metric_t = _safe_float(metric.get("t"), 0.0)
+        best_t = _safe_float(best_rise_metric.get("t"), 0.0)
+        if metric_t <= best_t + 45.0:
+            continue
+        drop_from_peak = (
+            max(
+                0.0,
+                _safe_float(metric.get("y"), 0.0) - _safe_float(best_rise_metric.get("y"), 0.0),
+            )
+            / scale
+        )
+        if drop_from_peak >= max(0.10, best_rise_metric["heightGain"] * 0.28):
+            return best_rise_metric["point"]
+
     transition_metrics = [
         metric
         for metric in candidate_metrics
-        if metric["heightGain"] >= max(0.08, max_height_gain * 0.35)
+        if metric["heightGain"] >= min_peak_gain
         and metric["futureDrop"] >= max(0.16, metric["heightGain"] * 0.35)
     ]
     if transition_metrics:
