@@ -955,6 +955,7 @@ def _backswing_metric(
     top_idx: int,
     image_height: Optional[float],
     wrist_track: Optional[List[dict]] = None,
+    force_wrist: bool = False,
 ) -> Dict[str, object]:
     address = motion_track[address_idx]
     top = motion_track[top_idx]
@@ -975,10 +976,15 @@ def _backswing_metric(
             _safe_float(address.get("t"), 0.0),
             _safe_float(top.get("t"), 0.0),
         )
-        if wrist_motion and (
-            wrist_motion["travelRatio"] >= WRIST_MIN_EVENT_TRAVEL_RATIO
-            or wrist_motion["riseRatio"] >= WRIST_MIN_EVENT_RISE_RATIO
-        ):
+        wrist_motion_usable = (
+            wrist_motion
+            and (
+                force_wrist
+                or wrist_motion["travelRatio"] >= WRIST_MIN_EVENT_TRAVEL_RATIO
+                or wrist_motion["riseRatio"] >= WRIST_MIN_EVENT_RISE_RATIO
+            )
+        )
+        if wrist_motion_usable:
             travel_ratio = max(wrist_motion["riseRatio"], wrist_motion["travelRatio"] * 0.75)
             source = "pose_wrist"
 
@@ -1274,7 +1280,15 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     if not shaft_samples:
         shaft_samples = _club_box_shaft_samples(club_track)
     shaft = _shaft_plane(shaft_samples, address_ms, top_ms, impact_ms)
-    backswing = _backswing_metric(motion_track, person_track, address_idx, top_idx, height, wrist_track)
+    backswing = _backswing_metric(
+        motion_track,
+        person_track,
+        address_idx,
+        top_idx,
+        height,
+        wrist_track,
+        str(event_source).startswith("pose_wrist"),
+    )
     readiness = _readiness_metric(frames)
     tracking = _tracking_quality(frames, club_head_track, handle_track, club_track, ball_track, person_track)
     ball = _ball_metric(ball_track, impact_ms, width, height)
