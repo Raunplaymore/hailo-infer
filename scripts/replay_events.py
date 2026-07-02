@@ -805,6 +805,94 @@ def _feature_vote_events(body_payload: Optional[Dict[str, Any]]) -> Dict[str, An
     }
 
 
+def _feature_vote_events_from_clusters(
+    clusters: list[Dict[str, Any]],
+    start_t: float,
+    *,
+    use_offset_model: bool = False,
+) -> Dict[str, Any]:
+    if len(clusters) < 2:
+        return {"available": False}
+
+    top_candidates = [
+        cluster
+        for cluster in clusters
+        if start_t + 20.0 <= _safe_float(cluster.get("t"), 0.0) <= start_t + 760.0
+    ]
+    if not top_candidates:
+        return {"available": False}
+
+    if use_offset_model:
+        target_offset = 70.0 if start_t < 100.0 else 350.0
+        top_cluster = min(
+            top_candidates,
+            key=lambda cluster: (
+                abs((_safe_float(cluster.get("t"), 0.0) - start_t) - target_offset),
+                -_safe_float(cluster.get("weight"), 0.0),
+            ),
+        )
+    else:
+        max_top_weight = max(_safe_float(cluster.get("weight"), 0.0) for cluster in top_candidates)
+        strong_top = [
+            cluster
+            for cluster in top_candidates
+            if _safe_float(cluster.get("weight"), 0.0) >= max_top_weight * 0.55
+        ]
+        top_cluster = min(strong_top, key=lambda cluster: _safe_float(cluster.get("t"), 0.0))
+    top_t = _safe_float(top_cluster.get("t"), 0.0)
+
+    impact_candidates = [
+        cluster
+        for cluster in clusters
+        if top_t + 90.0 <= _safe_float(cluster.get("t"), 0.0) <= top_t + 650.0
+    ]
+    if impact_candidates:
+        target_gap = 180.0 if use_offset_model else 180.0
+        impact_cluster = min(
+            impact_candidates,
+            key=lambda cluster: (
+                abs((_safe_float(cluster.get("t"), 0.0) - top_t) - target_gap),
+                -_safe_float(cluster.get("weight"), 0.0),
+            ),
+        )
+    else:
+        impact_cluster = None
+    impact_t = _safe_float(impact_cluster.get("t"), 0.0) if impact_cluster else None
+
+    finish_cluster = None
+    if impact_t is not None:
+        finish_candidates = [
+            cluster
+            for cluster in clusters
+            if impact_t + 150.0 <= _safe_float(cluster.get("t"), 0.0) <= impact_t + 780.0
+        ]
+        if finish_candidates:
+            finish_cluster = min(
+                finish_candidates,
+                key=lambda cluster: (
+                    abs((_safe_float(cluster.get("t"), 0.0) - impact_t) - 330.0),
+                    -_safe_float(cluster.get("weight"), 0.0),
+                ),
+            )
+
+    return {
+        "available": True,
+        "events": {
+            "addressMs": round(start_t),
+            "topMs": round(top_t),
+            "impactMs": round(impact_t) if impact_t is not None else None,
+            "finishMs": round(_safe_float(finish_cluster.get("t"), 0.0)) if finish_cluster else None,
+        },
+        "debug": {
+            "startMs": round(start_t),
+            "topWeight": round(_safe_float(top_cluster.get("weight"), 0.0), 2),
+            "impactWeight": round(_safe_float(impact_cluster.get("weight"), 0.0), 2) if impact_cluster else None,
+            "finishWeight": round(_safe_float(finish_cluster.get("weight"), 0.0), 2) if finish_cluster else None,
+            "offsetModel": use_offset_model,
+        },
+    }
+
+
 def _print_feature_vote_experiment(
     body_payload: Optional[Dict[str, Any]],
     labels: Dict[str, Any],
@@ -831,6 +919,40 @@ def _print_feature_vote_experiment(
         for cluster in clusters[:8]
     ]
     print(f"  clusters={json.dumps(preview, ensure_ascii=False)}")
+
+
+def _print_feature_vote_gated_experiment(
+    body_payload: Optional[Dict[str, Any]],
+    labels: Dict[str, Any],
+    tolerance_ms: float,
+) -> None:
+    print("\nexperiment body-feature-vote gated-candidates")
+    base = _feature_vote_events(body_payload)
+    clusters = base.get("clusters") if isinstance(base.get("clusters"), list) else []
+    if not clusters:
+        print("  missing")
+        return
+
+    scored: list[tuple[float, str, Dict[str, Any], Dict[str, Any]]] = []
+    for cluster in clusters[:10]:
+        start_t = _safe_float(cluster.get("t"), 0.0)
+        for mode_name, use_offset_model in (("consensus", False), ("offset", True)):
+            candidate = _feature_vote_events_from_clusters(clusters, start_t, use_offset_model=use_offset_model)
+            if not candidate.get("available"):
+                continue
+            events = candidate["events"]
+            errors = _event_errors(events, labels)
+            total = sum(value for value in errors.values() if value is not None)
+            scored.append((total, mode_name, events, candidate.get("debug", {})))
+
+    if not scored:
+        print("  missing")
+        return
+    for total, mode_name, events, debug in sorted(scored, key=lambda item: item[0])[:8]:
+        errors = _event_errors(events, labels)
+        compact = " ".join(f"{key}={events.get(key)}" for key in EVENT_KEYS)
+        print(f"  {mode_name}: {_status(errors, tolerance_ms)} {compact} totalError={total:.0f}ms")
+        print(f"    debug={json.dumps(debug, ensure_ascii=False, sort_keys=True)}")
 
 
 def _single_source_track(body_payload: Optional[Dict[str, Any]], source: str) -> list[Dict[str, Any]]:
@@ -1173,6 +1295,7 @@ def _print_body_diagnostics(
     _print_arm_angle_experiment(body_payload, labels, tolerance_ms)
     _print_feature_probe_experiment(body_payload, labels, tolerance_ms)
     _print_feature_vote_experiment(body_payload, labels, tolerance_ms)
+    _print_feature_vote_gated_experiment(body_payload, labels, tolerance_ms)
     _print_label_address_cropped_experiment(body_payload, labels, tolerance_ms)
 
 
