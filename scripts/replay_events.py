@@ -299,6 +299,139 @@ def _phase_turnaround_events(wrist_track: list[Dict[str, Any]]) -> Dict[str, Any
     }
 
 
+def _unwrap_angle(prev: Optional[float], angle: float) -> float:
+    if prev is None:
+        return angle
+    while angle - prev > math.pi:
+        angle -= math.tau
+    while angle - prev < -math.pi:
+        angle += math.tau
+    return angle
+
+
+def _arm_angle_track(body_payload: Optional[Dict[str, Any]], side: str) -> list[Dict[str, Any]]:
+    frames = body_payload.get("frames") if isinstance(body_payload, dict) else None
+    if not isinstance(frames, list):
+        return []
+    track: list[Dict[str, Any]] = []
+    prev_angle: Optional[float] = None
+    for idx, frame in enumerate(frames):
+        if not isinstance(frame, dict):
+            continue
+        if side == "mid":
+            left_wrist = _keypoint_xyc(frame, "left_wrist")
+            right_wrist = _keypoint_xyc(frame, "right_wrist")
+            left_shoulder = _keypoint_xyc(frame, "left_shoulder")
+            right_shoulder = _keypoint_xyc(frame, "right_shoulder")
+            if not (left_wrist and right_wrist and left_shoulder and right_shoulder):
+                continue
+            if min(left_wrist[2], right_wrist[2], left_shoulder[2], right_shoulder[2]) < 0.02:
+                continue
+            wrist = ((left_wrist[0] + right_wrist[0]) / 2.0, (left_wrist[1] + right_wrist[1]) / 2.0)
+            shoulder = ((left_shoulder[0] + right_shoulder[0]) / 2.0, (left_shoulder[1] + right_shoulder[1]) / 2.0)
+            conf = min(left_wrist[2], right_wrist[2], left_shoulder[2], right_shoulder[2])
+        else:
+            wrist_point = _keypoint_xyc(frame, f"{side}_wrist")
+            shoulder_point = _keypoint_xyc(frame, f"{side}_shoulder")
+            if not wrist_point or not shoulder_point:
+                continue
+            if min(wrist_point[2], shoulder_point[2]) < 0.02:
+                continue
+            wrist = (wrist_point[0], wrist_point[1])
+            shoulder = (shoulder_point[0], shoulder_point[1])
+            conf = min(wrist_point[2], shoulder_point[2])
+        dx = wrist[0] - shoulder[0]
+        dy = wrist[1] - shoulder[1]
+        angle = _unwrap_angle(prev_angle, math.atan2(dy, dx))
+        prev_angle = angle
+        track.append(
+            {
+                "t": _safe_float(frame.get("timeMs"), idx * 33.33),
+                "frame": _safe_int(frame.get("frameIndex"), idx),
+                "angle": angle,
+                "radius": math.hypot(dx, dy),
+                "conf": conf,
+                "source": f"{side}_arm_angle",
+            }
+        )
+    track.sort(key=lambda point: (_safe_int(point.get("frame"), 0), _safe_float(point.get("t"), 0.0)))
+    return track
+
+
+def _angle_phase_events(angle_track: list[Dict[str, Any]]) -> Dict[str, Any]:
+    if len(angle_track) < 5:
+        return {"available": False, "points": len(angle_track)}
+
+    address = angle_track[0]
+    address_t = _safe_float(address.get("t"), 0.0)
+    address_angle = _safe_float(address.get("angle"), 0.0)
+    last_t = _safe_float(angle_track[-1].get("t"), address_t)
+    duration = max(1.0, last_t - address_t)
+
+    search_start = address_t + min(80.0, duration * 0.06)
+    search_end = address_t + min(760.0, duration * 0.38)
+    candidates = [
+        point
+        for point in angle_track
+        if search_start <= _safe_float(point.get("t"), 0.0) <= search_end
+    ]
+    if len(candidates) < 3:
+        return {"available": False, "points": len(angle_track)}
+
+    deltas = [abs(_safe_float(point.get("angle"), 0.0) - address_angle) for point in candidates]
+    max_delta = max(deltas) if deltas else 0.0
+    if max_delta < 0.08:
+        return {"available": False, "points": len(angle_track)}
+    top = max(candidates, key=lambda point: abs(_safe_float(point.get("angle"), 0.0) - address_angle))
+    top_t = _safe_float(top.get("t"), 0.0)
+    top_angle = _safe_float(top.get("angle"), 0.0)
+    direction = 1.0 if top_angle - address_angle >= 0 else -1.0
+
+    impact = None
+    impact_candidates = [
+        point
+        for point in angle_track
+        if top_t + 80.0 <= _safe_float(point.get("t"), 0.0) <= top_t + 330.0
+    ]
+    for point in impact_candidates:
+        return_ratio = direction * (top_angle - _safe_float(point.get("angle"), 0.0)) / max(max_delta, 1e-6)
+        if return_ratio >= 0.62:
+            impact = point
+            break
+    if impact is None and impact_candidates:
+        target_t = top_t + 160.0
+        impact = min(impact_candidates, key=lambda point: abs(_safe_float(point.get("t"), 0.0) - target_t))
+
+    finish = None
+    if impact:
+        impact_t = _safe_float(impact.get("t"), 0.0)
+        finish_candidates = [
+            point
+            for point in angle_track
+            if impact_t + 220.0 <= _safe_float(point.get("t"), 0.0) <= impact_t + 520.0
+        ]
+        if finish_candidates:
+            target_t = impact_t + 330.0
+            finish = min(finish_candidates, key=lambda point: abs(_safe_float(point.get("t"), 0.0) - target_t))
+
+    return {
+        "available": True,
+        "points": len(angle_track),
+        "events": {
+            "addressMs": round(address_t),
+            "topMs": round(_safe_float(top.get("t"), 0.0)) if top else None,
+            "impactMs": round(_safe_float(impact.get("t"), 0.0)) if impact else None,
+            "finishMs": round(_safe_float(finish.get("t"), 0.0)) if finish else None,
+        },
+        "debug": {
+            "addressAngle": round(address_angle, 4),
+            "topAngle": round(top_angle, 4),
+            "maxDelta": round(max_delta, 4),
+            "direction": "positive" if direction > 0 else "negative",
+        },
+    }
+
+
 def _single_source_track(body_payload: Optional[Dict[str, Any]], source: str) -> list[Dict[str, Any]]:
     frames = body_payload.get("frames") if isinstance(body_payload, dict) else None
     if not isinstance(frames, list):
@@ -493,6 +626,42 @@ def _print_phase_turnaround_experiment(
         _print_event_block(f"experiment phase-turnaround best={best_name}", best_events, labels, tolerance_ms)
 
 
+def _print_arm_angle_experiment(
+    body_payload: Optional[Dict[str, Any]],
+    labels: Dict[str, Any],
+    tolerance_ms: float,
+    start_ms: float = 0.0,
+    title_suffix: str = "",
+) -> None:
+    suffix = f" {title_suffix}" if title_suffix else ""
+    print(f"\nexperiment arm-angle{suffix}")
+    best_name = None
+    best_total = float("inf")
+    best_events: Optional[Dict[str, Any]] = None
+    for side in ("left", "right", "mid"):
+        track = _arm_angle_track(body_payload, side)
+        if start_ms > 0:
+            track = _relative_track(track, start_ms)
+        candidate = _angle_phase_events(track)
+        if not candidate.get("available"):
+            print(f"  {side}_arm: missing")
+            continue
+        absolute = _absolute_events(candidate["events"], start_ms)
+        errors = _event_errors(absolute, labels)
+        total = sum(value for value in errors.values() if value is not None)
+        compact = " ".join(f"{key}={absolute.get(key)}" for key in EVENT_KEYS)
+        debug = candidate.get("debug", {})
+        print(f"  {side}_arm: {_status(errors, tolerance_ms)} {compact} totalError={total:.0f}ms")
+        print(f"    debug={json.dumps(debug, ensure_ascii=False, sort_keys=True)}")
+        if total < best_total:
+            best_name = f"{side}_arm"
+            best_total = total
+            best_events = absolute
+    if best_events:
+        _print_event_block(f"experiment arm-angle best={best_name}{suffix}", best_events, labels, tolerance_ms)
+        print(f"  totalError: {best_total:.0f}ms")
+
+
 def _crop_track(track: list[Dict[str, Any]], start_ms: float) -> list[Dict[str, Any]]:
     return [point for point in track if _safe_float(point.get("t"), 0.0) >= start_ms]
 
@@ -585,6 +754,7 @@ def _print_label_address_cropped_experiment(
     if best_absolute:
         _print_event_block(f"experiment label-address-cropped best={best_name}", best_absolute, labels, tolerance_ms)
         print(f"  totalError: {best_total:.0f}ms")
+    _print_arm_angle_experiment(body_payload, labels, tolerance_ms, start_ms=start_ms, title_suffix="label-address-cropped")
 
 
 def _print_body_diagnostics(
@@ -599,6 +769,7 @@ def _print_body_diagnostics(
     _print_event_block("experiment preserve-wrist-time", wrist_events, labels, tolerance_ms)
     _print_first_backswing_experiment(body_payload, labels, tolerance_ms)
     _print_phase_turnaround_experiment(body_payload, labels, tolerance_ms)
+    _print_arm_angle_experiment(body_payload, labels, tolerance_ms)
     _print_label_address_cropped_experiment(body_payload, labels, tolerance_ms)
 
 
