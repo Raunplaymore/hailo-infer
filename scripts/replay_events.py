@@ -708,10 +708,10 @@ def _cluster_candidate_times(candidates: list[tuple[float, float, str]], band_ms
     return result
 
 
-def _feature_vote_events(body_payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _feature_vote_clusters(body_payload: Optional[Dict[str, Any]], band_ms: float = 70.0) -> list[Dict[str, Any]]:
     feature_tracks = _body_feature_tracks(body_payload)
     if not feature_tracks:
-        return {"available": False}
+        return []
 
     all_times = [
         _safe_float(point.get("t"), 0.0)
@@ -719,7 +719,7 @@ def _feature_vote_events(body_payload: Optional[Dict[str, Any]]) -> Dict[str, An
         for point in track
     ]
     if not all_times:
-        return {"available": False}
+        return []
     address_t = min(all_times)
     last_t = max(all_times)
     duration = max(1.0, last_t - address_t)
@@ -733,9 +733,17 @@ def _feature_vote_events(body_payload: Optional[Dict[str, Any]]) -> Dict[str, An
             if candidate_t < address_t + 20.0 or candidate_t > address_t + min(2300.0, duration):
                 continue
             candidates.append((candidate_t, weight, f"{feature_name}/{kind}"))
-    clusters = _cluster_candidate_times(candidates)
+    return _cluster_candidate_times(candidates, band_ms=band_ms)
+
+
+def _feature_vote_events(body_payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    clusters = _feature_vote_clusters(body_payload)
     if len(clusters) < 2:
         return {"available": False, "clusters": clusters}
+
+    address_t = min(_safe_float(cluster.get("t"), 0.0) for cluster in clusters)
+    last_t = max(_safe_float(cluster.get("t"), 0.0) for cluster in clusters)
+    duration = max(1.0, last_t - address_t)
 
     top_window_end = address_t + min(850.0, duration * 0.45)
     top_candidates = [
@@ -952,6 +960,41 @@ def _print_feature_vote_gated_experiment(
         errors = _event_errors(events, labels)
         compact = " ".join(f"{key}={events.get(key)}" for key in EVENT_KEYS)
         print(f"  {mode_name}: {_status(errors, tolerance_ms)} {compact} totalError={total:.0f}ms")
+        print(f"    debug={json.dumps(debug, ensure_ascii=False, sort_keys=True)}")
+
+
+def _print_feature_vote_band_sweep_experiment(
+    body_payload: Optional[Dict[str, Any]],
+    labels: Dict[str, Any],
+    tolerance_ms: float,
+) -> None:
+    print("\nexperiment body-feature-vote band-sweep")
+    scored: list[tuple[float, float, str, Dict[str, Any], Dict[str, Any]]] = []
+    for band_ms in (45.0, 60.0, 75.0, 90.0, 110.0, 135.0):
+        clusters = _feature_vote_clusters(body_payload, band_ms=band_ms)
+        if not clusters:
+            continue
+        for cluster in clusters[:10]:
+            start_t = _safe_float(cluster.get("t"), 0.0)
+            for mode_name, use_offset_model in (("consensus", False), ("offset", True)):
+                candidate = _feature_vote_events_from_clusters(clusters, start_t, use_offset_model=use_offset_model)
+                if not candidate.get("available"):
+                    continue
+                events = candidate["events"]
+                errors = _event_errors(events, labels)
+                total = sum(value for value in errors.values() if value is not None)
+                scored.append((total, band_ms, mode_name, events, candidate.get("debug", {})))
+
+    if not scored:
+        print("  missing")
+        return
+    for total, band_ms, mode_name, events, debug in sorted(scored, key=lambda item: item[0])[:10]:
+        errors = _event_errors(events, labels)
+        compact = " ".join(f"{key}={events.get(key)}" for key in EVENT_KEYS)
+        print(
+            f"  band={band_ms:.0f}/{mode_name}: {_status(errors, tolerance_ms)} "
+            f"{compact} totalError={total:.0f}ms"
+        )
         print(f"    debug={json.dumps(debug, ensure_ascii=False, sort_keys=True)}")
 
 
@@ -1296,6 +1339,7 @@ def _print_body_diagnostics(
     _print_feature_probe_experiment(body_payload, labels, tolerance_ms)
     _print_feature_vote_experiment(body_payload, labels, tolerance_ms)
     _print_feature_vote_gated_experiment(body_payload, labels, tolerance_ms)
+    _print_feature_vote_band_sweep_experiment(body_payload, labels, tolerance_ms)
     _print_label_address_cropped_experiment(body_payload, labels, tolerance_ms)
 
 
