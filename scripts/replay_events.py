@@ -100,6 +100,100 @@ def _events_from_track(wrist_track: list[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _track_scale(track: list[Dict[str, Any]]) -> float:
+    if not track:
+        return 1.0
+    xs = [_safe_float(point.get("x"), 0.0) for point in track]
+    ys = [_safe_float(point.get("y"), 0.0) for point in track]
+    return max(1e-6, max(xs) - min(xs), max(ys) - min(ys))
+
+
+def _first_backswing_local_events(wrist_track: list[Dict[str, Any]]) -> Dict[str, Any]:
+    if len(wrist_track) < 5:
+        return {"available": False, "wristPoints": len(wrist_track)}
+
+    address = wrist_track[0]
+    address_t = _safe_float(address.get("t"), 0.0)
+    address_y = _safe_float(address.get("y"), 0.0)
+    last_t = _safe_float(wrist_track[-1].get("t"), address_t)
+    duration = max(1.0, last_t - address_t)
+    scale = _track_scale(wrist_track)
+
+    top_search_start = address_t + min(140.0, duration * 0.1)
+    top_search_end = address_t + min(700.0, duration * 0.45)
+    candidates = [
+        point
+        for point in wrist_track
+        if top_search_start <= _safe_float(point.get("t"), 0.0) <= top_search_end
+    ]
+    if len(candidates) < 3:
+        return {"available": False, "wristPoints": len(wrist_track)}
+
+    min_rise = max(0.055, scale * 0.18)
+    plateau_band = max(0.012, scale * 0.08)
+    reversal_drop = max(0.018, scale * 0.11)
+    peak = candidates[0]
+    min_y = _safe_float(peak.get("y"), 0.0)
+    top = None
+    for point in candidates[1:]:
+        point_y = _safe_float(point.get("y"), 0.0)
+        if point_y < min_y:
+            min_y = point_y
+            peak = point
+            continue
+        if point_y <= min_y + plateau_band:
+            peak = point
+            continue
+        peak_t = _safe_float(peak.get("t"), 0.0)
+        height_gain = address_y - min_y
+        if height_gain >= min_rise and _safe_float(point.get("t"), 0.0) >= peak_t + 30.0:
+            if point_y - min_y >= reversal_drop:
+                top = peak
+                break
+
+    if top is None:
+        top = min(candidates, key=lambda point: _safe_float(point.get("y"), 0.0))
+
+    top_t = _safe_float(top.get("t"), 0.0)
+    impact_candidates = [
+        point
+        for point in wrist_track
+        if top_t + 80.0 <= _safe_float(point.get("t"), 0.0) <= top_t + 420.0
+    ]
+    impact = None
+    for point in impact_candidates:
+        point_y = _safe_float(point.get("y"), 0.0)
+        if point_y >= address_y - max(0.045, scale * 0.22):
+            impact = point
+            break
+    if impact is None and impact_candidates:
+        impact = max(impact_candidates, key=lambda point: _safe_float(point.get("y"), 0.0))
+
+    finish = None
+    if impact:
+        impact_t = _safe_float(impact.get("t"), 0.0)
+        finish_candidates = [
+            point
+            for point in wrist_track
+            if impact_t + 180.0 <= _safe_float(point.get("t"), 0.0) <= impact_t + 520.0
+        ]
+        if finish_candidates:
+            target_t = impact_t + 330.0
+            finish = min(finish_candidates, key=lambda point: abs(_safe_float(point.get("t"), 0.0) - target_t))
+
+    return {
+        "available": True,
+        "wristPoints": len(wrist_track),
+        "events": {
+            "addressMs": round(address_t),
+            "topMs": round(_safe_float(top.get("t"), 0.0)) if top else None,
+            "impactMs": round(_safe_float(impact.get("t"), 0.0)) if impact else None,
+            "finishMs": round(_safe_float(finish.get("t"), 0.0)) if finish else None,
+        },
+        "sources": _source_counts(wrist_track),
+    }
+
+
 def _single_source_track(body_payload: Optional[Dict[str, Any]], source: str) -> list[Dict[str, Any]]:
     frames = body_payload.get("frames") if isinstance(body_payload, dict) else None
     if not isinstance(frames, list):
@@ -232,6 +326,36 @@ def _print_source_candidates(body_payload: Optional[Dict[str, Any]], labels: Dic
         )
 
 
+def _print_first_backswing_experiment(
+    body_payload: Optional[Dict[str, Any]],
+    labels: Dict[str, Any],
+    tolerance_ms: float,
+) -> None:
+    print("\nexperiment first-backswing-local candidates")
+    tracks = {"merged": _wrist_track_from_body(body_payload)}
+    for source in ("left_wrist", "right_wrist", "weighted_midpoint"):
+        tracks[source] = _single_source_track(body_payload, source)
+    best_name = None
+    best_total = float("inf")
+    best_events: Optional[Dict[str, Any]] = None
+    for name, track in tracks.items():
+        candidate = _first_backswing_local_events(track)
+        if not candidate.get("available"):
+            print(f"  {name}: missing")
+            continue
+        events = candidate["events"]
+        errors = _event_errors(events, labels)
+        total = sum(value for value in errors.values() if value is not None)
+        compact = " ".join(f"{key}={events.get(key)}" for key in EVENT_KEYS)
+        print(f"  {name}: {_status(errors, tolerance_ms)} {compact} totalError={total:.0f}ms")
+        if total < best_total:
+            best_name = name
+            best_total = total
+            best_events = events
+    if best_events:
+        _print_event_block(f"experiment first-backswing-local best={best_name}", best_events, labels, tolerance_ms)
+
+
 def replay_fixture(fixture_path: Path, force: bool, allow_missing: bool, diagnostics: bool) -> int:
     fixture = _load_json(fixture_path)
     job_id = str(fixture.get("jobId") or fixture_path.stem)
@@ -279,6 +403,7 @@ def replay_fixture(fixture_path: Path, force: bool, allow_missing: bool, diagnos
         _print_remap_diagnostics(meta_payload, wrist_events)
         _print_source_candidates(body_payload, labels, tolerance_ms)
         _print_event_block("experiment preserve-wrist-time", wrist_events, labels, tolerance_ms)
+        _print_first_backswing_experiment(body_payload, labels, tolerance_ms)
     return 0
 
 
