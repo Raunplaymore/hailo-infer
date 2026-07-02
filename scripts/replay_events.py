@@ -432,6 +432,234 @@ def _angle_phase_events(angle_track: list[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
+    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def _angle_between(a: tuple[float, float], b: tuple[float, float]) -> float:
+    return math.atan2(a[1] - b[1], a[0] - b[0])
+
+
+def _midpoint(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+    return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, min(a[2], b[2]))
+
+
+def _body_feature_tracks(body_payload: Optional[Dict[str, Any]]) -> Dict[str, list[Dict[str, Any]]]:
+    frames = body_payload.get("frames") if isinstance(body_payload, dict) else None
+    if not isinstance(frames, list):
+        return {}
+    tracks: Dict[str, list[Dict[str, Any]]] = {}
+
+    def add(name: str, t: float, value: float, conf: float) -> None:
+        if conf < 0.02 or not math.isfinite(value):
+            return
+        tracks.setdefault(name, []).append({"t": t, "value": value, "conf": conf})
+
+    for idx, frame in enumerate(frames):
+        if not isinstance(frame, dict):
+            continue
+        t = _safe_float(frame.get("timeMs"), idx * 33.33)
+        points = {
+            name: _keypoint_xyc(frame, name)
+            for name in (
+                "nose",
+                "left_shoulder",
+                "right_shoulder",
+                "left_elbow",
+                "right_elbow",
+                "left_wrist",
+                "right_wrist",
+                "left_hip",
+                "right_hip",
+                "left_knee",
+                "right_knee",
+                "left_ankle",
+                "right_ankle",
+            )
+        }
+        for name, point in points.items():
+            if not point:
+                continue
+            add(f"{name}_x", t, point[0], point[2])
+            add(f"{name}_y", t, point[1], point[2])
+
+        pairs = {
+            "wrist_mid": ("left_wrist", "right_wrist"),
+            "shoulder_mid": ("left_shoulder", "right_shoulder"),
+            "hip_mid": ("left_hip", "right_hip"),
+            "ankle_mid": ("left_ankle", "right_ankle"),
+        }
+        mids: Dict[str, tuple[float, float, float]] = {}
+        for name, (left_name, right_name) in pairs.items():
+            left = points.get(left_name)
+            right = points.get(right_name)
+            if not left or not right:
+                continue
+            mid = _midpoint(left, right)
+            mids[name] = mid
+            add(f"{name}_x", t, mid[0], mid[2])
+            add(f"{name}_y", t, mid[1], mid[2])
+
+        distance_pairs = {
+            "wrist_gap": ("left_wrist", "right_wrist"),
+            "shoulder_width": ("left_shoulder", "right_shoulder"),
+            "hip_width": ("left_hip", "right_hip"),
+            "left_arm_span": ("left_shoulder", "left_wrist"),
+            "right_arm_span": ("right_shoulder", "right_wrist"),
+            "left_elbow_span": ("left_elbow", "left_wrist"),
+            "right_elbow_span": ("right_elbow", "right_wrist"),
+        }
+        for name, (a_name, b_name) in distance_pairs.items():
+            a = points.get(a_name)
+            b = points.get(b_name)
+            if not a or not b:
+                continue
+            add(name, t, _distance((a[0], a[1]), (b[0], b[1])), min(a[2], b[2]))
+
+        if "wrist_mid" in mids and "shoulder_mid" in mids:
+            add(
+                "wrist_to_shoulder_mid",
+                t,
+                _distance((mids["wrist_mid"][0], mids["wrist_mid"][1]), (mids["shoulder_mid"][0], mids["shoulder_mid"][1])),
+                min(mids["wrist_mid"][2], mids["shoulder_mid"][2]),
+            )
+            add(
+                "wrist_shoulder_angle",
+                t,
+                _angle_between((mids["wrist_mid"][0], mids["wrist_mid"][1]), (mids["shoulder_mid"][0], mids["shoulder_mid"][1])),
+                min(mids["wrist_mid"][2], mids["shoulder_mid"][2]),
+            )
+        if "shoulder_mid" in mids and "hip_mid" in mids:
+            add(
+                "torso_center_x",
+                t,
+                (mids["shoulder_mid"][0] + mids["hip_mid"][0]) / 2.0,
+                min(mids["shoulder_mid"][2], mids["hip_mid"][2]),
+            )
+            add(
+                "torso_center_y",
+                t,
+                (mids["shoulder_mid"][1] + mids["hip_mid"][1]) / 2.0,
+                min(mids["shoulder_mid"][2], mids["hip_mid"][2]),
+            )
+            add(
+                "torso_axis_angle",
+                t,
+                _angle_between((mids["shoulder_mid"][0], mids["shoulder_mid"][1]), (mids["hip_mid"][0], mids["hip_mid"][1])),
+                min(mids["shoulder_mid"][2], mids["hip_mid"][2]),
+            )
+
+        angle_pairs = {
+            "shoulder_line_angle": ("left_shoulder", "right_shoulder"),
+            "hip_line_angle": ("left_hip", "right_hip"),
+            "left_upper_arm_angle": ("left_elbow", "left_shoulder"),
+            "right_upper_arm_angle": ("right_elbow", "right_shoulder"),
+            "left_forearm_angle": ("left_wrist", "left_elbow"),
+            "right_forearm_angle": ("right_wrist", "right_elbow"),
+        }
+        for name, (a_name, b_name) in angle_pairs.items():
+            a = points.get(a_name)
+            b = points.get(b_name)
+            if not a or not b:
+                continue
+            add(name, t, _angle_between((a[0], a[1]), (b[0], b[1])), min(a[2], b[2]))
+
+    for track in tracks.values():
+        track.sort(key=lambda point: _safe_float(point.get("t"), 0.0))
+    return tracks
+
+
+def _probe_candidate_times(track: list[Dict[str, Any]], kind: str) -> list[float]:
+    if len(track) < 3:
+        return []
+    values = [_safe_float(point.get("value"), 0.0) for point in track]
+    times = [_safe_float(point.get("t"), 0.0) for point in track]
+    if kind == "global_min":
+        return [times[min(range(len(values)), key=lambda idx: values[idx])]]
+    if kind == "global_max":
+        return [times[max(range(len(values)), key=lambda idx: values[idx])]]
+
+    candidates: list[float] = []
+    if kind in {"local_min", "local_max"}:
+        for idx in range(1, len(values) - 1):
+            if kind == "local_min" and values[idx] <= values[idx - 1] and values[idx] <= values[idx + 1]:
+                candidates.append(times[idx])
+            if kind == "local_max" and values[idx] >= values[idx - 1] and values[idx] >= values[idx + 1]:
+                candidates.append(times[idx])
+        return candidates
+
+    velocities: list[tuple[float, float]] = []
+    for idx in range(1, len(track)):
+        dt = max(1e-6, times[idx] - times[idx - 1])
+        velocities.append((times[idx], (values[idx] - values[idx - 1]) / dt))
+    if len(velocities) < 3:
+        return []
+    velocity_values = [item[1] for item in velocities]
+    velocity_times = [item[0] for item in velocities]
+    if kind == "velocity_pos_peak":
+        return [velocity_times[max(range(len(velocity_values)), key=lambda idx: velocity_values[idx])]]
+    if kind == "velocity_neg_peak":
+        return [velocity_times[min(range(len(velocity_values)), key=lambda idx: velocity_values[idx])]]
+    if kind == "abs_velocity_peak":
+        return [velocity_times[max(range(len(velocity_values)), key=lambda idx: abs(velocity_values[idx]))]]
+    return []
+
+
+def _nearest_candidate_time(candidates: list[float], target: Any) -> Optional[float]:
+    if target is None or not candidates:
+        return None
+    target_t = _safe_float(target, 0.0)
+    return min(candidates, key=lambda candidate: abs(candidate - target_t))
+
+
+def _print_feature_probe_experiment(
+    body_payload: Optional[Dict[str, Any]],
+    labels: Dict[str, Any],
+    tolerance_ms: float,
+) -> None:
+    print("\nexperiment body-feature-probe oracle")
+    feature_tracks = _body_feature_tracks(body_payload)
+    if not feature_tracks:
+        print("  missing")
+        return
+
+    scored: list[tuple[float, str, Dict[str, Optional[int]]]] = []
+    for feature_name, track in feature_tracks.items():
+        if len(track) < 5:
+            continue
+        for kind in (
+            "global_min",
+            "global_max",
+            "local_min",
+            "local_max",
+            "velocity_pos_peak",
+            "velocity_neg_peak",
+            "abs_velocity_peak",
+        ):
+            candidates = _probe_candidate_times(track, kind)
+            if not candidates:
+                continue
+            events: Dict[str, Optional[int]] = {"addressMs": labels.get("addressMs")}
+            for key in ("topMs", "impactMs", "finishMs"):
+                nearest = _nearest_candidate_time(candidates, labels.get(key))
+                events[key] = round(nearest) if nearest is not None else None
+            errors = _event_errors(events, labels)
+            comparable = [value for key, value in errors.items() if key != "addressMs" and value is not None]
+            if len(comparable) < 2:
+                continue
+            total = sum(comparable)
+            scored.append((total, f"{feature_name}/{kind}", events))
+
+    if not scored:
+        print("  missing")
+        return
+    for total, name, events in sorted(scored, key=lambda item: item[0])[:10]:
+        errors = _event_errors(events, labels)
+        status = _status(errors, tolerance_ms)
+        compact = " ".join(f"{key}={events.get(key)}" for key in EVENT_KEYS)
+        print(f"  {name}: {status} {compact} probeError={total:.0f}ms")
+
+
 def _single_source_track(body_payload: Optional[Dict[str, Any]], source: str) -> list[Dict[str, Any]]:
     frames = body_payload.get("frames") if isinstance(body_payload, dict) else None
     if not isinstance(frames, list):
@@ -770,6 +998,7 @@ def _print_body_diagnostics(
     _print_first_backswing_experiment(body_payload, labels, tolerance_ms)
     _print_phase_turnaround_experiment(body_payload, labels, tolerance_ms)
     _print_arm_angle_experiment(body_payload, labels, tolerance_ms)
+    _print_feature_probe_experiment(body_payload, labels, tolerance_ms)
     _print_label_address_cropped_experiment(body_payload, labels, tolerance_ms)
 
 
