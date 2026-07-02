@@ -1,0 +1,17 @@
+{
+  "jobId": "e60a695a-c195-4d15-812c-63fb92cc851e",
+  "viewpoint": "down_the_line",
+  "notes": "필드 연습장 혜리 스윙1",
+  "toleranceMs": 66,
+  "labels": {
+    "addressMs": 426,
+    "topMs": 792,
+    "impactMs": 966,
+    "finishMs": 1270
+  },
+  "artifacts": {
+    "metaPath": "/tmp/e60a695a-c195-4d15-812c-63fb92cc851e.debug.meta.json",
+    "bodyPath": "/home/ray/data/body/e60a695a-c195-4d15-812c-63fb92cc851e.json",
+    "analysisPath": "/home/ray/data/analysis/e60a695a-c195-4d15-812c-63fb92cc851e.json"
+  }
+}

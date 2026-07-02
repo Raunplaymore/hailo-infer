@@ -1,0 +1,17 @@
+{
+  "jobId": "52bd51f0-205e-42d1-96a2-205832b10024",
+  "viewpoint": "down_the_line",
+  "notes": "필드 연습장 정욱 스윙1",
+  "toleranceMs": 66,
+  "labels": {
+    "addressMs": 190,
+    "topMs": 518,
+    "impactMs": 645,
+    "finishMs": 870
+  },
+  "artifacts": {
+    "metaPath": "/tmp/52bd51f0-205e-42d1-96a2-205832b10024.debug.meta.json",
+    "bodyPath": "/home/ray/data/body/52bd51f0-205e-42d1-96a2-205832b10024.json",
+    "analysisPath": "/home/ray/data/analysis/52bd51f0-205e-42d1-96a2-205832b10024.json"
+  }
+}

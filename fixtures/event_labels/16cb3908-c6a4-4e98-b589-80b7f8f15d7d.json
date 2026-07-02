@@ -1,0 +1,18 @@
+
+ {
+    "jobId": "16cb3908-c6a4-4e98-b589-80b7f8f15d7d",
+    "viewpoint": "down_the_line",
+    "notes": "실내 연습장 정욱 스윙",
+    "toleranceMs": 66,
+    "labels": {
+      "addressMs": 0,
+      "topMs": 21,
+      "impactMs": 473,
+      "finishMs": 734
+    },
+    "artifacts": {
+      "metaPath": "/tmp/16cb3908-c6a4-4e98-b589-80b7f8f15d7d.debug.meta.json",
+      "bodyPath": "/home/ray/data/body/16cb3908-c6a4-4e98-b589-80b7f8f15d7d.json",
+      "analysisPath": "/home/ray/data/analysis/16cb3908-c6a4-4e98-b589-80b7f8f15d7d.json"
+    }
+  }

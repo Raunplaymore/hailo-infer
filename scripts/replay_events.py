@@ -493,6 +493,38 @@ def _print_phase_turnaround_experiment(
         _print_event_block(f"experiment phase-turnaround best={best_name}", best_events, labels, tolerance_ms)
 
 
+def _print_body_diagnostics(
+    body_payload: Optional[Dict[str, Any]],
+    wrist_events: Dict[str, Any],
+    labels: Dict[str, Any],
+    tolerance_ms: float,
+) -> None:
+    if not wrist_events:
+        return
+    _print_source_candidates(body_payload, labels, tolerance_ms)
+    _print_event_block("experiment preserve-wrist-time", wrist_events, labels, tolerance_ms)
+    _print_first_backswing_experiment(body_payload, labels, tolerance_ms)
+    _print_phase_turnaround_experiment(body_payload, labels, tolerance_ms)
+
+
+def _warn_label_anomalies(labels: Dict[str, Any], body_payload: Optional[Dict[str, Any]]) -> None:
+    frames = body_payload.get("frames") if isinstance(body_payload, dict) else None
+    if not isinstance(frames, list) or not frames:
+        return
+    times = [
+        _safe_float(frame.get("timeMs"), idx * 33.33)
+        for idx, frame in enumerate(frames)
+        if isinstance(frame, dict)
+    ]
+    if not times:
+        return
+    max_time = max(times)
+    for key in EVENT_KEYS:
+        label_time = labels.get(key)
+        if label_time is not None and _safe_float(label_time, 0.0) > max_time + 500.0:
+            print(f"label warning: {key}={label_time} exceeds body max time {round(max_time)}ms")
+
+
 def replay_fixture(fixture_path: Path, force: bool, allow_missing: bool, diagnostics: bool) -> int:
     fixture = _load_json(fixture_path)
     job_id = str(fixture.get("jobId") or fixture_path.stem)
@@ -512,6 +544,7 @@ def replay_fixture(fixture_path: Path, force: bool, allow_missing: bool, diagnos
         body_payload = _load_json(body_path)
     elif body_path:
         print(f"body: missing ({body_path})")
+    _warn_label_anomalies(labels, body_payload)
 
     wrist = _wrist_events(body_payload)
     if wrist.get("available"):
@@ -524,6 +557,8 @@ def replay_fixture(fixture_path: Path, force: bool, allow_missing: bool, diagnos
     if not meta_path or not meta_path.exists():
         missing = meta_path if meta_path else "not configured"
         print(f"\nservice replay: missing meta ({missing})")
+        if diagnostics and wrist.get("available"):
+            _print_body_diagnostics(body_payload, wrist["events"], labels, tolerance_ms)
         return 0 if allow_missing else 2
 
     meta_payload = _load_json(meta_path)
@@ -538,10 +573,7 @@ def replay_fixture(fixture_path: Path, force: bool, allow_missing: bool, diagnos
         wrist_events = wrist["events"]
         _print_delta_block("service - wrist raw", service_events, wrist_events)
         _print_remap_diagnostics(meta_payload, wrist_events)
-        _print_source_candidates(body_payload, labels, tolerance_ms)
-        _print_event_block("experiment preserve-wrist-time", wrist_events, labels, tolerance_ms)
-        _print_first_backswing_experiment(body_payload, labels, tolerance_ms)
-        _print_phase_turnaround_experiment(body_payload, labels, tolerance_ms)
+        _print_body_diagnostics(body_payload, wrist_events, labels, tolerance_ms)
     return 0
 
 
