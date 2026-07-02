@@ -412,7 +412,7 @@ def _nearest_track_index_by_time(track: List[dict], time_ms: float) -> Optional[
 def _find_address_index(track: List[dict], speeds: List[float]) -> Optional[int]:
     if not track or not speeds:
         return None
-    search_end = max(1, min(len(track) - 1, max(3, len(track) // 5)))
+    search_end = max(1, min(len(track) - 1, len(speeds) - 1, max(3, len(track) // 5)))
     speed_ref = max(_median(speeds), _mean(speeds) * 0.35, 1e-6)
     best_idx = 0
     best_score = float("-inf")
@@ -495,12 +495,102 @@ def _find_top_from_wrist_track(wrist_track: List[dict], address_time_ms: float) 
     return best
 
 
-def _find_impact_after_top(track: List[dict], speeds: List[float], address_idx: int, top_idx: int) -> Optional[int]:
+def _find_impact_from_wrist_track(
+    wrist_track: List[dict],
+    top: dict,
+    club_head_track: Optional[List[dict]] = None,
+) -> Optional[dict]:
+    if len(wrist_track) < 3:
+        return None
+    top_t = _safe_float(top.get("t"), 0.0)
+    window_start_ms = top_t + 110.0
+    window_end_ms = top_t + 300.0
+    candidates = [
+        point
+        for point in wrist_track
+        if window_start_ms <= _safe_float(point.get("t"), 0.0) <= window_end_ms
+    ]
+    if len(candidates) < 2:
+        return None
+
+    xs = [_safe_float(point.get("x"), 0.0) for point in wrist_track]
+    ys = [_safe_float(point.get("y"), 0.0) for point in wrist_track]
+    scale = max(1e-6, max(xs) - min(xs), max(ys) - min(ys))
+    target_ms = top_t + 180.0
+    best = candidates[0]
+    best_score = float("-inf")
+    for point in candidates:
+        point_t = _safe_float(point.get("t"), 0.0)
+        descent = max(0.0, _safe_float(point.get("y"), 0.0) - _safe_float(top.get("y"), 0.0)) / scale
+        travel = math.hypot(
+            _safe_float(point.get("x"), 0.0) - _safe_float(top.get("x"), 0.0),
+            _safe_float(point.get("y"), 0.0) - _safe_float(top.get("y"), 0.0),
+        ) / scale
+        head = _nearest_track_point(club_head_track or [], point_t, 70.0)
+        head_score = _safe_float(head.get("conf"), 0.0) if head else 0.0
+        time_score = 1.0 - min(1.0, abs(point_t - target_ms) / 150.0)
+        score = descent * 0.34 + travel * 0.22 + max(0.0, time_score) * 0.34 + head_score * 0.1
+        if score > best_score:
+            best_score = score
+            best = point
+    return best
+
+
+def _find_finish_from_wrist_track(wrist_track: List[dict], impact: dict) -> Optional[dict]:
+    if len(wrist_track) < 3:
+        return None
+    impact_t = _safe_float(impact.get("t"), 0.0)
+    window_start_ms = impact_t + 150.0
+    window_end_ms = impact_t + 430.0
+    candidates = [
+        point
+        for point in wrist_track
+        if window_start_ms <= _safe_float(point.get("t"), 0.0) <= window_end_ms
+    ]
+    if len(candidates) < 2:
+        return None
+
+    xs = [_safe_float(point.get("x"), 0.0) for point in wrist_track]
+    ys = [_safe_float(point.get("y"), 0.0) for point in wrist_track]
+    scale = max(1e-6, max(xs) - min(xs), max(ys) - min(ys))
+    target_ms = impact_t + 260.0
+    best = candidates[0]
+    best_score = float("-inf")
+    for point in candidates:
+        point_t = _safe_float(point.get("t"), 0.0)
+        travel = math.hypot(
+            _safe_float(point.get("x"), 0.0) - _safe_float(impact.get("x"), 0.0),
+            _safe_float(point.get("y"), 0.0) - _safe_float(impact.get("y"), 0.0),
+        ) / scale
+        height_gain = max(0.0, _safe_float(impact.get("y"), 0.0) - _safe_float(point.get("y"), 0.0)) / scale
+        time_score = 1.0 - min(1.0, abs(point_t - target_ms) / 180.0)
+        score = travel * 0.36 + height_gain * 0.28 + max(0.0, time_score) * 0.36
+        if score > best_score:
+            best_score = score
+            best = point
+    return best
+
+
+def _nearest_track_point(track: List[dict], time_ms: float, max_delta_ms: float) -> Optional[dict]:
+    idx = _nearest_track_index_by_time(track, time_ms)
+    if idx is None:
+        return None
+    point = track[idx]
+    return point if abs(_safe_float(point.get("t"), 0.0) - time_ms) <= max_delta_ms else None
+
+
+def _find_impact_after_top(
+    track: List[dict],
+    speeds: List[float],
+    address_idx: int,
+    top_idx: int,
+    club_head_track: Optional[List[dict]] = None,
+) -> Optional[int]:
     if len(track) < 3:
         return None
     top_t = _safe_float(track[top_idx].get("t"), 0.0)
-    window_start_ms = top_t + 150.0
-    window_end_ms = top_t + 380.0
+    window_start_ms = top_t + 110.0
+    window_end_ms = top_t + 280.0
     candidates = [
         idx
         for idx in range(top_idx + 1, len(track))
@@ -514,22 +604,25 @@ def _find_impact_after_top(track: List[dict], speeds: List[float], address_idx: 
     top = track[top_idx]
     scale = _coord_scale(track)
     max_speed = max(speeds) if speeds else 1.0
-    target_ms = top_t + 250.0
+    target_ms = top_t + 175.0
     best_idx = candidates[0]
     best_score = float("-inf")
     for idx in candidates:
         point = track[idx]
+        head = _nearest_track_point(club_head_track or [], _safe_float(point.get("t"), 0.0), 65.0)
         speed_score = speeds[idx] / max(max_speed, 1e-6)
         address_y_score = 1.0 - min(1.0, abs(point["y"] - address["y"]) / scale)
         address_dist_score = 1.0 - min(1.0, math.hypot(point["x"] - address["x"], point["y"] - address["y"]) / (scale * 1.35))
         descent = max(0.0, point["y"] - top["y"]) / scale
-        time_score = 1.0 - min(1.0, abs(_safe_float(point.get("t"), 0.0) - target_ms) / 180.0)
+        head_score = _safe_float(head.get("conf"), 0.0) if head else 0.0
+        time_score = 1.0 - min(1.0, abs(_safe_float(point.get("t"), 0.0) - target_ms) / 150.0)
         score = (
-            speed_score * 0.34
-            + address_y_score * 0.22
-            + address_dist_score * 0.18
-            + descent * 0.16
-            + max(0.0, time_score) * 0.1
+            speed_score * 0.24
+            + address_y_score * 0.19
+            + address_dist_score * 0.15
+            + descent * 0.13
+            + max(0.0, time_score) * 0.23
+            + head_score * 0.06
         )
         if score > best_score:
             best_score = score
@@ -541,8 +634,8 @@ def _find_finish_after_impact(track: List[dict], speeds: List[float], impact_idx
     if len(track) < 2:
         return None
     impact_t = _safe_float(track[impact_idx].get("t"), 0.0)
-    window_start_ms = impact_t + 100.0
-    window_end_ms = impact_t + 380.0
+    window_start_ms = impact_t + 120.0
+    window_end_ms = impact_t + 340.0
     candidates = [
         idx
         for idx in range(impact_idx + 1, len(track))
@@ -555,7 +648,7 @@ def _find_finish_after_impact(track: List[dict], speeds: List[float], impact_idx
     address = track[0]
     impact = track[impact_idx]
     scale = _coord_scale(track)
-    target_ms = impact_t + 210.0
+    target_ms = impact_t + 230.0
     best_idx = candidates[0]
     best_score = float("-inf")
     for idx in candidates:
@@ -575,6 +668,7 @@ def _segment_events(
     track: List[dict],
     speeds: List[float],
     wrist_track: Optional[List[dict]] = None,
+    club_head_track: Optional[List[dict]] = None,
 ) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[int], str, Optional[dict]]:
     if not track or not speeds:
         return None, None, None, None, "empty", None
@@ -584,16 +678,22 @@ def _segment_events(
         return None, None, None, None, "empty", None
     address_time_ms = _safe_float(track[address_idx].get("t"), 0.0)
     wrist_top = _find_top_from_wrist_track(wrist_track or [], address_time_ms)
+    wrist_impact = _find_impact_from_wrist_track(wrist_track or [], wrist_top, club_head_track) if wrist_top else None
+    wrist_finish = _find_finish_from_wrist_track(wrist_track or [], wrist_impact) if wrist_impact else None
     top_idx = _nearest_track_index_by_time(track, _safe_float(wrist_top.get("t"), 0.0)) if wrist_top else None
-    event_source = "pose_wrist_top" if top_idx is not None else "trajectory_score"
+    impact_idx = _nearest_track_index_by_time(track, _safe_float(wrist_impact.get("t"), 0.0)) if wrist_impact else None
+    finish_idx = _nearest_track_index_by_time(track, _safe_float(wrist_finish.get("t"), 0.0)) if wrist_finish else None
+    event_source = "pose_wrist_fusion" if top_idx is not None and impact_idx is not None else "trajectory_score"
     if top_idx is None:
         top_idx = _find_top_after_address(track, address_idx)
     if top_idx is None:
         return address_idx, None, None, None, "no_top", wrist_top
-    impact_idx = _find_impact_after_top(track, smoothed, address_idx, top_idx)
+    if impact_idx is None:
+        impact_idx = _find_impact_after_top(track, smoothed, address_idx, top_idx, club_head_track)
     if impact_idx is None:
         return address_idx, top_idx, None, None, "no_impact", wrist_top
-    finish_idx = _find_finish_after_impact(track, smoothed, impact_idx)
+    if finish_idx is None:
+        finish_idx = _find_finish_after_impact(track, smoothed, impact_idx)
     return address_idx, top_idx, impact_idx, finish_idx, event_source, wrist_top
 
 
@@ -1034,7 +1134,10 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         motion_track,
         speeds,
         wrist_track,
+        club_head_track,
     )
+    wrist_impact = _find_impact_from_wrist_track(wrist_track, wrist_top, club_head_track) if wrist_top else None
+    wrist_finish = _find_finish_from_wrist_track(wrist_track, wrist_impact) if wrist_impact else None
     if impact_idx is None:
         impact_idx = _argmax(speeds) if speeds else None
         event_source = "speed_fallback"
@@ -1157,6 +1260,8 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "eventSource": event_source,
             "wristPoints": float(len(wrist_track)),
             "wristTopMs": float(wrist_top.get("t")) if wrist_top else None,
+            "wristImpactMs": float(wrist_impact.get("t")) if wrist_impact else None,
+            "wristFinishMs": float(wrist_finish.get("t")) if wrist_finish else None,
             "eventIndices": {
                 "address": int(address_idx),
                 "top": int(top_idx),
