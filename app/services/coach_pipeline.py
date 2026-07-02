@@ -509,8 +509,7 @@ def _find_top_from_wrist_track(wrist_track: List[dict], address_time_ms: float) 
     ys = [_safe_float(point.get("y"), 0.0) for point in wrist_track]
     scale = max(1e-6, max(xs) - min(xs), max(ys) - min(ys))
     target_ms = address_time_ms + min(520.0, duration * 0.36)
-    best = candidates[0]
-    best_score = float("-inf")
+    candidate_metrics: List[Dict[str, Any]] = []
     for point in candidates:
         point_t = _safe_float(point.get("t"), 0.0)
         point_y = _safe_float(point.get("y"), 0.0)
@@ -532,10 +531,44 @@ def _find_top_from_wrist_track(wrist_track: List[dict], address_time_ms: float) 
         ) / scale
         time_score = 1.0 - min(1.0, abs(point_t - target_ms) / 300.0)
         conf_score = _safe_float(point.get("conf"), 0.0)
-        score = height_gain * 0.36 + displacement * 0.2 + future_drop * 0.28 + max(0.0, time_score) * 0.1 + conf_score * 0.06
-        if score > best_score:
-            best_score = score
-            best = point
+        candidate_metrics.append(
+            {
+                "point": point,
+                "heightGain": height_gain,
+                "displacement": displacement,
+                "futureDrop": future_drop,
+                "timeScore": max(0.0, time_score),
+                "confScore": conf_score,
+            }
+        )
+
+    max_height_gain = max((metric["heightGain"] for metric in candidate_metrics), default=0.0)
+    transition_metrics = [
+        metric
+        for metric in candidate_metrics
+        if metric["heightGain"] >= max(0.08, max_height_gain * 0.35)
+        and metric["futureDrop"] >= max(0.16, metric["heightGain"] * 0.35)
+    ]
+    if transition_metrics:
+        first_transition_t = _safe_float(transition_metrics[0]["point"].get("t"), 0.0)
+        early_transition_metrics = [
+            metric
+            for metric in transition_metrics
+            if _safe_float(metric["point"].get("t"), 0.0) <= first_transition_t + 260.0
+        ]
+        candidate_metrics = early_transition_metrics or transition_metrics
+
+    best_metric = max(
+        candidate_metrics,
+        key=lambda metric: (
+            metric["heightGain"] * 0.42
+            + metric["futureDrop"] * 0.32
+            + metric["displacement"] * 0.12
+            + metric["timeScore"] * 0.08
+            + metric["confScore"] * 0.06
+        ),
+    )
+    best = best_metric["point"]
     return best
 
 
