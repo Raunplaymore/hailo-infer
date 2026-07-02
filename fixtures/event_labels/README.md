@@ -27,6 +27,7 @@ Run:
 ```bash
 python3 scripts/replay_events.py
 python3 scripts/replay_events.py --allow-missing
+python3 scripts/replay_events.py --diagnostics fixtures/event_labels/<jobId>.json
 python3 scripts/replay_events.py fixtures/event_labels/<jobId>.json
 ```
 
