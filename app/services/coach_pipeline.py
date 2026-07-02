@@ -23,6 +23,9 @@ CLUB_LABELS = {"club", "golf_club", "baseball_bat", "bat"}
 HANDLE_LABELS = {"club_handle", "handle", "grip", "club_grip"}
 MOTION_SOURCE_PRIORITY = {"club_head": 0, "club_handle": 1, "club_box_endpoint": 2, "club": 3}
 WRIST_CONFIDENCE_MIN = 0.25
+WRIST_PERSON_HEIGHT_NORM = 0.72
+WRIST_MIN_EVENT_TRAVEL_RATIO = 0.08
+WRIST_MIN_EVENT_RISE_RATIO = 0.035
 
 
 class CoachError(Exception):
@@ -579,6 +582,47 @@ def _nearest_track_point(track: List[dict], time_ms: float, max_delta_ms: float)
     return point if abs(_safe_float(point.get("t"), 0.0) - time_ms) <= max_delta_ms else None
 
 
+def _wrist_motion_between(wrist_track: List[dict], start_ms: float, end_ms: float) -> Optional[Dict[str, float]]:
+    start = _nearest_track_point(wrist_track, start_ms, 85.0)
+    end = _nearest_track_point(wrist_track, end_ms, 85.0)
+    if not start or not end:
+        return None
+    dx = _safe_float(end.get("x"), 0.0) - _safe_float(start.get("x"), 0.0)
+    dy = _safe_float(end.get("y"), 0.0) - _safe_float(start.get("y"), 0.0)
+    travel = math.hypot(dx, dy)
+    rise = max(0.0, -dy)
+    drop = max(0.0, dy)
+    return {
+        "travelRatio": travel / WRIST_PERSON_HEIGHT_NORM,
+        "riseRatio": rise / WRIST_PERSON_HEIGHT_NORM,
+        "dropRatio": drop / WRIST_PERSON_HEIGHT_NORM,
+    }
+
+
+def _wrist_events_are_usable(
+    wrist_track: List[dict],
+    address_time_ms: float,
+    wrist_top: Optional[dict],
+    wrist_impact: Optional[dict],
+) -> bool:
+    if not wrist_top or not wrist_impact:
+        return False
+    top_motion = _wrist_motion_between(wrist_track, address_time_ms, _safe_float(wrist_top.get("t"), 0.0))
+    down_motion = _wrist_motion_between(
+        wrist_track,
+        _safe_float(wrist_top.get("t"), 0.0),
+        _safe_float(wrist_impact.get("t"), 0.0),
+    )
+    if not top_motion or not down_motion:
+        return False
+    top_has_motion = (
+        top_motion["travelRatio"] >= WRIST_MIN_EVENT_TRAVEL_RATIO
+        or top_motion["riseRatio"] >= WRIST_MIN_EVENT_RISE_RATIO
+    )
+    down_has_motion = down_motion["travelRatio"] >= WRIST_MIN_EVENT_TRAVEL_RATIO
+    return top_has_motion and down_has_motion
+
+
 def _find_impact_after_top(
     track: List[dict],
     speeds: List[float],
@@ -680,10 +724,13 @@ def _segment_events(
     wrist_top = _find_top_from_wrist_track(wrist_track or [], address_time_ms)
     wrist_impact = _find_impact_from_wrist_track(wrist_track or [], wrist_top, club_head_track) if wrist_top else None
     wrist_finish = _find_finish_from_wrist_track(wrist_track or [], wrist_impact) if wrist_impact else None
-    top_idx = _nearest_track_index_by_time(track, _safe_float(wrist_top.get("t"), 0.0)) if wrist_top else None
-    impact_idx = _nearest_track_index_by_time(track, _safe_float(wrist_impact.get("t"), 0.0)) if wrist_impact else None
-    finish_idx = _nearest_track_index_by_time(track, _safe_float(wrist_finish.get("t"), 0.0)) if wrist_finish else None
+    wrist_usable = _wrist_events_are_usable(wrist_track or [], address_time_ms, wrist_top, wrist_impact)
+    top_idx = _nearest_track_index_by_time(track, _safe_float(wrist_top.get("t"), 0.0)) if wrist_usable and wrist_top else None
+    impact_idx = _nearest_track_index_by_time(track, _safe_float(wrist_impact.get("t"), 0.0)) if wrist_usable and wrist_impact else None
+    finish_idx = _nearest_track_index_by_time(track, _safe_float(wrist_finish.get("t"), 0.0)) if wrist_usable and wrist_finish else None
     event_source = "pose_wrist_fusion" if top_idx is not None and impact_idx is not None else "trajectory_score"
+    if wrist_top and wrist_impact and not wrist_usable:
+        event_source = "trajectory_score_wrist_rejected"
     if top_idx is None:
         top_idx = _find_top_after_address(track, address_idx)
     if top_idx is None:
@@ -916,10 +963,17 @@ def _backswing_metric(
     wrist_address = _nearest_track_point(wrist_track or [], _safe_float(address.get("t"), 0.0), 80.0)
     wrist_top = _nearest_track_point(wrist_track or [], _safe_float(top.get("t"), 0.0), 80.0)
     if wrist_address and wrist_top:
-        wrist_person_h = 0.72
-        wrist_vertical = max(0.0, _safe_float(wrist_address.get("y"), 0.0) - _safe_float(wrist_top.get("y"), 0.0))
-        travel_ratio = wrist_vertical / wrist_person_h
-        source = "pose_wrist"
+        wrist_motion = _wrist_motion_between(
+            wrist_track or [],
+            _safe_float(address.get("t"), 0.0),
+            _safe_float(top.get("t"), 0.0),
+        )
+        if wrist_motion and (
+            wrist_motion["travelRatio"] >= WRIST_MIN_EVENT_TRAVEL_RATIO
+            or wrist_motion["riseRatio"] >= WRIST_MIN_EVENT_RISE_RATIO
+        ):
+            travel_ratio = max(wrist_motion["riseRatio"], wrist_motion["travelRatio"] * 0.75)
+            source = "pose_wrist"
 
     top_height_ratio = None
     if person:
