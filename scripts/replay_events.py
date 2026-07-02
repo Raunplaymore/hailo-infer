@@ -493,6 +493,100 @@ def _print_phase_turnaround_experiment(
         _print_event_block(f"experiment phase-turnaround best={best_name}", best_events, labels, tolerance_ms)
 
 
+def _crop_track(track: list[Dict[str, Any]], start_ms: float) -> list[Dict[str, Any]]:
+    return [point for point in track if _safe_float(point.get("t"), 0.0) >= start_ms]
+
+
+def _crop_label_events(labels: Dict[str, Any], start_ms: float) -> Dict[str, Any]:
+    cropped: Dict[str, Any] = {}
+    for key in EVENT_KEYS:
+        if labels.get(key) is None:
+            continue
+        cropped[key] = max(0.0, _safe_float(labels.get(key), 0.0) - start_ms)
+    return cropped
+
+
+def _relative_track(track: list[Dict[str, Any]], start_ms: float) -> list[Dict[str, Any]]:
+    cropped = _crop_track(track, start_ms)
+    relative: list[Dict[str, Any]] = []
+    for point in cropped:
+        relative.append({**point, "t": _safe_float(point.get("t"), 0.0) - start_ms})
+    return relative
+
+
+def _absolute_events(events: Dict[str, Any], start_ms: float) -> Dict[str, Any]:
+    absolute: Dict[str, Any] = {}
+    for key in EVENT_KEYS:
+        if events.get(key) is None:
+            absolute[key] = None
+        else:
+            absolute[key] = round(_safe_float(events.get(key), 0.0) + start_ms)
+    return absolute
+
+
+def _print_cropped_candidate(
+    title: str,
+    candidate: Dict[str, Any],
+    labels: Dict[str, Any],
+    start_ms: float,
+    tolerance_ms: float,
+) -> None:
+    if not candidate.get("available"):
+        print(f"  {title}: missing")
+        return
+    absolute = _absolute_events(candidate["events"], start_ms)
+    errors = _event_errors(absolute, labels)
+    total = sum(value for value in errors.values() if value is not None)
+    compact = " ".join(f"{key}={absolute.get(key)}" for key in EVENT_KEYS)
+    print(f"  {title}: {_status(errors, tolerance_ms)} {compact} totalError={total:.0f}ms")
+
+
+def _print_label_address_cropped_experiment(
+    body_payload: Optional[Dict[str, Any]],
+    labels: Dict[str, Any],
+    tolerance_ms: float,
+) -> None:
+    if labels.get("addressMs") is None:
+        return
+    start_ms = _safe_float(labels.get("addressMs"), 0.0)
+    print(f"\nexperiment label-address-cropped startMs={round(start_ms)}")
+    if start_ms <= 0:
+        print("  skipped: label address is already 0ms")
+        return
+
+    tracks = {"merged": _wrist_track_from_body(body_payload)}
+    for source in ("left_wrist", "right_wrist", "weighted_midpoint"):
+        tracks[source] = _single_source_track(body_payload, source)
+
+    cropped_labels = _crop_label_events(labels, start_ms)
+    best_name = None
+    best_total = float("inf")
+    best_absolute: Optional[Dict[str, Any]] = None
+    for name, track in tracks.items():
+        relative = _relative_track(track, start_ms)
+        print(f"  {name}: croppedPoints={len(relative)}")
+        candidates = {
+            "wrist-raw": _events_from_track(relative),
+            "first-backswing": _first_backswing_local_events(relative),
+            "phase-turnaround": _phase_turnaround_events(relative),
+        }
+        for candidate_name, candidate in candidates.items():
+            title = f"{name}/{candidate_name}"
+            _print_cropped_candidate(title, candidate, labels, start_ms, tolerance_ms)
+            if not candidate.get("available"):
+                continue
+            absolute = _absolute_events(candidate["events"], start_ms)
+            errors = _event_errors(absolute, labels)
+            total = sum(value for value in errors.values() if value is not None)
+            if total < best_total:
+                best_name = title
+                best_total = total
+                best_absolute = absolute
+    if best_absolute:
+        _print_event_block(f"experiment label-address-cropped best={best_name}", best_absolute, labels, tolerance_ms)
+        print(f"  totalError: {best_total:.0f}ms")
+
+
 def _print_body_diagnostics(
     body_payload: Optional[Dict[str, Any]],
     wrist_events: Dict[str, Any],
@@ -505,6 +599,7 @@ def _print_body_diagnostics(
     _print_event_block("experiment preserve-wrist-time", wrist_events, labels, tolerance_ms)
     _print_first_backswing_experiment(body_payload, labels, tolerance_ms)
     _print_phase_turnaround_experiment(body_payload, labels, tolerance_ms)
+    _print_label_address_cropped_experiment(body_payload, labels, tolerance_ms)
 
 
 def _warn_label_anomalies(labels: Dict[str, Any], body_payload: Optional[Dict[str, Any]]) -> None:
