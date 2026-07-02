@@ -900,6 +900,7 @@ def _backswing_metric(
     address_idx: int,
     top_idx: int,
     image_height: Optional[float],
+    wrist_track: Optional[List[dict]] = None,
 ) -> Dict[str, object]:
     address = motion_track[address_idx]
     top = motion_track[top_idx]
@@ -910,16 +911,31 @@ def _backswing_metric(
     highest_y = min(p["y"] for p in pre_top)
     vertical_travel = max(0.0, address["y"] - highest_y)
     travel_ratio = vertical_travel / person_h
+    source = "club_motion"
+
+    wrist_address = _nearest_track_point(wrist_track or [], _safe_float(address.get("t"), 0.0), 80.0)
+    wrist_top = _nearest_track_point(wrist_track or [], _safe_float(top.get("t"), 0.0), 80.0)
+    if wrist_address and wrist_top:
+        wrist_person_h = 0.72
+        wrist_vertical = max(0.0, _safe_float(wrist_address.get("y"), 0.0) - _safe_float(wrist_top.get("y"), 0.0))
+        travel_ratio = wrist_vertical / wrist_person_h
+        source = "pose_wrist"
 
     top_height_ratio = None
     if person:
         person_top = person["y"] - person["h"] / 2.0
         top_height_ratio = (top["y"] - person_top) / person_h
 
-    score = _clamp(travel_ratio / 0.42)
-    if travel_ratio < 0.18:
+    target_ratio = 0.22 if source == "pose_wrist" else 0.42
+    short_threshold = 0.08 if source == "pose_wrist" else 0.18
+    score = _clamp(travel_ratio / target_ratio)
+    if travel_ratio < short_threshold:
         label = "short"
-        comment = "백스윙 탑까지 클럽 이동량이 작습니다. 어깨 회전과 손 위치가 충분히 올라가는지 확인하세요."
+        comment = (
+            "백스윙 탑까지 손목 이동량이 작습니다. 어깨 회전과 손 위치가 충분히 올라가는지 확인하세요."
+            if source == "pose_wrist"
+            else "백스윙 탑까지 클럽 이동량이 작습니다. 어깨 회전과 손 위치가 충분히 올라가는지 확인하세요."
+        )
     elif top_height_ratio is not None and top_height_ratio > 0.62:
         label = "low_top"
         comment = "백스윙 탑 위치가 낮게 잡힙니다. 전신 프레임에서 왼팔과 어깨 회전 폭을 함께 확인하세요."
@@ -928,13 +944,19 @@ def _backswing_metric(
         comment = "백스윙 탑이 매우 높게 잡힙니다. 오버스윙이거나 카메라 각도 영향일 수 있습니다."
     else:
         label = "adequate"
-        comment = "백스윙 크기는 service7 클럽 추적 기준에서 적정 범위입니다."
+        comment = (
+            "백스윙 크기는 pose 손목 추적 기준에서 적정 범위입니다."
+            if source == "pose_wrist"
+            else "백스윙 크기는 service7 클럽 추적 기준에서 적정 범위입니다."
+        )
 
     return {
         "label": label,
         "score": round(score, 2),
         "clubTravelRatio": round(travel_ratio, 2),
+        "handTravelRatio": round(travel_ratio, 2) if source == "pose_wrist" else None,
         "topHeightRatio": round(top_height_ratio, 2) if top_height_ratio is not None else None,
+        "source": source,
         "comment": comment,
     }
 
@@ -1191,7 +1213,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     if not shaft_samples:
         shaft_samples = _club_box_shaft_samples(club_track)
     shaft = _shaft_plane(shaft_samples, address_ms, top_ms, impact_ms)
-    backswing = _backswing_metric(motion_track, person_track, address_idx, top_idx, height)
+    backswing = _backswing_metric(motion_track, person_track, address_idx, top_idx, height, wrist_track)
     readiness = _readiness_metric(frames)
     tracking = _tracking_quality(frames, club_head_track, handle_track, club_track, ball_track, person_track)
     ball = _ball_metric(ball_track, impact_ms, width, height)
