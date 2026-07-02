@@ -1,0 +1,17 @@
+{
+  "jobId": "1ffe447c-cd2f-4733-a449-1dfa1c5387b5",
+  "viewpoint": "face_on",
+  "notes": "정면 전신 샘플. 기존 결과가 top=884ms/frame53, impact=914ms/frame55로 follow-through를 잡은 회귀 케이스.",
+  "toleranceMs": 80,
+  "labels": {
+    "addressMs": 0,
+    "topMs": 391,
+    "impactMs": 503,
+    "finishMs": 838
+  },
+  "artifacts": {
+    "metaPath": "/tmp/1ffe447c-cd2f-4733-a449-1dfa1c5387b5.debug.meta.json",
+    "bodyPath": "/home/ray/data/body/1ffe447c-cd2f-4733-a449-1dfa1c5387b5.json",
+    "analysisPath": "/home/ray/data/analysis/1ffe447c-cd2f-4733-a449-1dfa1c5387b5.json"
+  }
+}
