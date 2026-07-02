@@ -627,6 +627,23 @@ def _find_impact_from_wrist_track(
     ys = [_safe_float(point.get("y"), 0.0) for point in wrist_track]
     scale = max(1e-6, max(xs) - min(xs), max(ys) - min(ys))
     target_ms = top_t + 180.0
+    candidate_metrics: List[Dict[str, Any]] = []
+    for point in candidates:
+        descent = max(0.0, _safe_float(point.get("y"), 0.0) - _safe_float(top.get("y"), 0.0)) / scale
+        travel = math.hypot(
+            _safe_float(point.get("x"), 0.0) - _safe_float(top.get("x"), 0.0),
+            _safe_float(point.get("y"), 0.0) - _safe_float(top.get("y"), 0.0),
+        ) / scale
+        candidate_metrics.append({"point": point, "descent": descent, "travel": travel})
+
+    max_descent = max((metric["descent"] for metric in candidate_metrics), default=0.0)
+    for metric in candidate_metrics:
+        if (
+            metric["descent"] >= max(0.12, max_descent * 0.75)
+            and metric["travel"] >= max(0.12, max_descent * 0.55)
+        ):
+            return metric["point"]
+
     best = candidates[0]
     best_score = float("-inf")
     for point in candidates:
@@ -650,8 +667,8 @@ def _find_finish_from_wrist_track(wrist_track: List[dict], impact: dict) -> Opti
     if len(wrist_track) < 3:
         return None
     impact_t = _safe_float(impact.get("t"), 0.0)
-    window_start_ms = impact_t + 150.0
-    window_end_ms = impact_t + 430.0
+    window_start_ms = impact_t + 180.0
+    window_end_ms = impact_t + 470.0
     candidates = [
         point
         for point in wrist_track
@@ -663,7 +680,7 @@ def _find_finish_from_wrist_track(wrist_track: List[dict], impact: dict) -> Opti
     xs = [_safe_float(point.get("x"), 0.0) for point in wrist_track]
     ys = [_safe_float(point.get("y"), 0.0) for point in wrist_track]
     scale = max(1e-6, max(xs) - min(xs), max(ys) - min(ys))
-    target_ms = impact_t + 260.0
+    target_ms = impact_t + 340.0
     best = candidates[0]
     best_score = float("-inf")
     for point in candidates:
