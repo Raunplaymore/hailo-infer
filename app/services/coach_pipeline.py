@@ -373,33 +373,57 @@ def _wrist_track_from_body(body: Optional[Dict[str, Any]]) -> List[dict]:
     if not isinstance(frames, list):
         return []
     track: List[dict] = []
+    previous: Optional[dict] = None
     for idx, frame in enumerate(frames):
         if not isinstance(frame, dict):
             continue
-        wrists = [
-            point
-            for point in (
-                _keypoint_xyc(frame, "left_wrist"),
-                _keypoint_xyc(frame, "right_wrist"),
+        left = _keypoint_xyc(frame, "left_wrist")
+        right = _keypoint_xyc(frame, "right_wrist")
+        candidates: List[dict] = []
+        for name, point in (("left_wrist", left), ("right_wrist", right)):
+            if point is None:
+                continue
+            x, y, conf = point
+            if conf < 0.02:
+                continue
+            candidates.append({"x": x, "y": y, "conf": conf, "wristSource": name})
+        wrist_gap = math.hypot(left[0] - right[0], left[1] - right[1]) if left and right else float("inf")
+        if left and right and left[2] >= 0.02 and right[2] >= 0.02 and wrist_gap <= 0.16:
+            total_conf = max(1e-6, left[2] + right[2])
+            candidates.append(
+                {
+                    "x": (left[0] * left[2] + right[0] * right[2]) / total_conf,
+                    "y": (left[1] * left[2] + right[1] * right[2]) / total_conf,
+                    "conf": _mean([left[2], right[2]]),
+                    "wristSource": "weighted_midpoint",
+                }
             )
-            if point is not None and point[2] >= WRIST_CONFIDENCE_MIN
-        ]
-        if not wrists:
+        if not candidates:
             continue
-        # Golf grip keeps both hands close; midpoint is stabler than either wrist alone.
-        x = _mean([point[0] for point in wrists])
-        y = _mean([point[1] for point in wrists])
-        conf = _mean([point[2] for point in wrists])
-        track.append(
-            {
-                "x": x,
-                "y": y,
-                "t": _safe_float(frame.get("timeMs"), idx * 33.33),
-                "frame": _safe_int(frame.get("frameIndex"), idx),
-                "conf": conf,
-                "source": "pose_wrist",
-            }
-        )
+        if previous:
+            max_jump = 0.32
+
+            def score(candidate: dict) -> float:
+                jump = math.hypot(candidate["x"] - previous["x"], candidate["y"] - previous["y"])
+                continuity = 1.0 - min(1.0, jump / max_jump)
+                height_bias = 1.0 - _clamp(candidate["y"])
+                conf_score = _clamp(candidate["conf"])
+                return continuity * 0.52 + conf_score * 0.28 + height_bias * 0.2
+
+            selected = max(candidates, key=score)
+        else:
+            selected = max(candidates, key=lambda candidate: _clamp(candidate["conf"]) * 0.68 + (1.0 - _clamp(candidate["y"])) * 0.32)
+        point = {
+            "x": selected["x"],
+            "y": selected["y"],
+            "t": _safe_float(frame.get("timeMs"), idx * 33.33),
+            "frame": _safe_int(frame.get("frameIndex"), idx),
+            "conf": selected["conf"],
+            "source": "pose_wrist",
+            "wristSource": selected["wristSource"],
+        }
+        track.append(point)
+        previous = point
     track.sort(key=lambda point: (_safe_int(point.get("frame"), 0), _safe_float(point.get("t"), 0.0)))
     return track
 
@@ -1292,6 +1316,10 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     readiness = _readiness_metric(frames)
     tracking = _tracking_quality(frames, club_head_track, handle_track, club_track, ball_track, person_track)
     ball = _ball_metric(ball_track, impact_ms, width, height)
+    wrist_sources: Dict[str, int] = {}
+    for point in wrist_track:
+        source_name = str(point.get("wristSource") or "unknown")
+        wrist_sources[source_name] = wrist_sources.get(source_name, 0) + 1
 
     confidence = round(
         _clamp(
@@ -1356,6 +1384,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "motionSource": motion_source,
             "eventSource": event_source,
             "wristPoints": float(len(wrist_track)),
+            "wristSources": wrist_sources,
             "wristTopMs": float(wrist_top.get("t")) if wrist_top else None,
             "wristImpactMs": float(wrist_impact.get("t")) if wrist_impact else None,
             "wristFinishMs": float(wrist_finish.get("t")) if wrist_finish else None,
