@@ -508,18 +508,31 @@ def _find_top_from_wrist_track(wrist_track: List[dict], address_time_ms: float) 
     xs = [_safe_float(point.get("x"), 0.0) for point in wrist_track]
     ys = [_safe_float(point.get("y"), 0.0) for point in wrist_track]
     scale = max(1e-6, max(xs) - min(xs), max(ys) - min(ys))
-    target_ms = address_time_ms + min(760.0, duration * 0.52)
+    target_ms = address_time_ms + min(520.0, duration * 0.36)
     best = candidates[0]
     best_score = float("-inf")
     for point in candidates:
+        point_t = _safe_float(point.get("t"), 0.0)
+        point_y = _safe_float(point.get("y"), 0.0)
+        future = [
+            future_point
+            for future_point in search
+            if point_t + 80.0 <= _safe_float(future_point.get("t"), 0.0) <= point_t + 320.0
+        ]
+        future_drop = 0.0
+        if future:
+            future_drop = max(
+                0.0,
+                max(_safe_float(future_point.get("y"), 0.0) for future_point in future) - point_y,
+            ) / scale
         height_gain = max(0.0, _safe_float(address.get("y"), 0.0) - _safe_float(point.get("y"), 0.0)) / scale
         displacement = math.hypot(
             _safe_float(point.get("x"), 0.0) - _safe_float(address.get("x"), 0.0),
             _safe_float(point.get("y"), 0.0) - _safe_float(address.get("y"), 0.0),
         ) / scale
-        time_score = 1.0 - min(1.0, abs(_safe_float(point.get("t"), 0.0) - target_ms) / 320.0)
+        time_score = 1.0 - min(1.0, abs(point_t - target_ms) / 300.0)
         conf_score = _safe_float(point.get("conf"), 0.0)
-        score = height_gain * 0.48 + displacement * 0.27 + max(0.0, time_score) * 0.17 + conf_score * 0.08
+        score = height_gain * 0.36 + displacement * 0.2 + future_drop * 0.28 + max(0.0, time_score) * 0.1 + conf_score * 0.06
         if score > best_score:
             best_score = score
             best = point
