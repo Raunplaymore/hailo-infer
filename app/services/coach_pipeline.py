@@ -176,6 +176,9 @@ def _normalize_times(frames: List[dict], fps: int) -> List[Optional[float]]:
         return [None for _ in frames]
     max_t = max(t for t in times if t is not None)
     if not explicit_ms and max_t < 1000:
+        expected_seconds = len(frames) / float(max(1, fps))
+        if max_t > expected_seconds * 4.0:
+            return times
         return [(t * 1000.0 if t is not None else None) for t in times]
     return times
 
