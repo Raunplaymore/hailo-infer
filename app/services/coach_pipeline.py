@@ -26,6 +26,7 @@ WRIST_CONFIDENCE_MIN = 0.25
 WRIST_PERSON_HEIGHT_NORM = 0.72
 WRIST_MIN_EVENT_TRAVEL_RATIO = 0.08
 WRIST_MIN_EVENT_RISE_RATIO = 0.035
+EVENT_FALLBACK_ENABLED = False
 
 
 class CoachError(Exception):
@@ -725,21 +726,27 @@ def _segment_events(
     wrist_impact = _find_impact_from_wrist_track(wrist_track or [], wrist_top, club_head_track) if wrist_top else None
     wrist_finish = _find_finish_from_wrist_track(wrist_track or [], wrist_impact) if wrist_impact else None
     wrist_usable = _wrist_events_are_usable(wrist_track or [], address_time_ms, wrist_top, wrist_impact)
+    if not EVENT_FALLBACK_ENABLED and wrist_top:
+        top_idx = _nearest_track_index_by_time(track, _safe_float(wrist_top.get("t"), 0.0))
+        impact_idx = _nearest_track_index_by_time(track, _safe_float(wrist_impact.get("t"), 0.0)) if wrist_impact else None
+        finish_idx = _nearest_track_index_by_time(track, _safe_float(wrist_finish.get("t"), 0.0)) if wrist_finish else None
+        event_source = "pose_wrist_no_fallback" if wrist_usable else "pose_wrist_unvalidated_no_fallback"
+        return address_idx, top_idx, impact_idx, finish_idx, event_source, wrist_top
     top_idx = _nearest_track_index_by_time(track, _safe_float(wrist_top.get("t"), 0.0)) if wrist_usable and wrist_top else None
     impact_idx = _nearest_track_index_by_time(track, _safe_float(wrist_impact.get("t"), 0.0)) if wrist_usable and wrist_impact else None
     finish_idx = _nearest_track_index_by_time(track, _safe_float(wrist_finish.get("t"), 0.0)) if wrist_usable and wrist_finish else None
     event_source = "pose_wrist_fusion" if top_idx is not None and impact_idx is not None else "trajectory_score"
     if wrist_top and wrist_impact and not wrist_usable:
         event_source = "trajectory_score_wrist_rejected"
-    if top_idx is None:
+    if top_idx is None and EVENT_FALLBACK_ENABLED:
         top_idx = _find_top_after_address(track, address_idx)
     if top_idx is None:
         return address_idx, None, None, None, "no_top", wrist_top
-    if impact_idx is None:
+    if impact_idx is None and EVENT_FALLBACK_ENABLED:
         impact_idx = _find_impact_after_top(track, smoothed, address_idx, top_idx, club_head_track)
     if impact_idx is None:
         return address_idx, top_idx, None, None, "no_impact", wrist_top
-    if finish_idx is None:
+    if finish_idx is None and EVENT_FALLBACK_ENABLED:
         finish_idx = _find_finish_after_impact(track, smoothed, impact_idx)
     return address_idx, top_idx, impact_idx, finish_idx, event_source, wrist_top
 
@@ -1214,14 +1221,14 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     )
     wrist_impact = _find_impact_from_wrist_track(wrist_track, wrist_top, club_head_track) if wrist_top else None
     wrist_finish = _find_finish_from_wrist_track(wrist_track, wrist_impact) if wrist_impact else None
-    if impact_idx is None:
+    if impact_idx is None and EVENT_FALLBACK_ENABLED:
         impact_idx = _argmax(speeds) if speeds else None
         event_source = "speed_fallback"
-    if top_idx is None and impact_idx is not None:
+    if top_idx is None and impact_idx is not None and EVENT_FALLBACK_ENABLED:
         top_idx = _find_top(motion_track, impact_idx or 0)
-    if address_idx is None:
+    if address_idx is None and EVENT_FALLBACK_ENABLED:
         address_idx = _find_stable_index(speeds, 0, 1)
-    if finish_idx is None:
+    if finish_idx is None and EVENT_FALLBACK_ENABLED:
         finish_idx = _find_stable_index(speeds, len(speeds) - 1, -1)
 
     if impact_idx is None or top_idx is None or address_idx is None or finish_idx is None:
