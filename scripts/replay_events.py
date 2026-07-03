@@ -1124,12 +1124,7 @@ def _print_feature_sequence_experiment(
         print(f"    score={internal_score:.2f} debug={json.dumps(debug, ensure_ascii=False, sort_keys=True)}")
 
 
-def _print_body_event_selector_experiment(
-    body_payload: Optional[Dict[str, Any]],
-    labels: Dict[str, Any],
-    tolerance_ms: float,
-) -> None:
-    print("\nexperiment body-event-selector")
+def _body_event_selector_result(body_payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     sequence_ranked = _feature_sequence_ranked(body_payload)
     vote = _feature_vote_events(body_payload)
     candidate_name = None
@@ -1253,8 +1248,36 @@ def _print_body_event_selector_experiment(
             candidate_debug = {"score": round(score, 3), **debug}
 
     if candidate_events is None:
+        return {
+            "available": False,
+            "sequenceRanked": sequence_ranked,
+            "vote": vote,
+        }
+    return {
+        "available": True,
+        "method": candidate_name,
+        "events": candidate_events,
+        "debug": candidate_debug,
+        "sequenceRanked": sequence_ranked,
+        "vote": vote,
+    }
+
+
+def _print_body_event_selector_experiment(
+    body_payload: Optional[Dict[str, Any]],
+    labels: Dict[str, Any],
+    tolerance_ms: float,
+) -> None:
+    print("\nexperiment body-event-selector")
+    result = _body_event_selector_result(body_payload)
+    if not result.get("available"):
         print("  missing")
         return
+    candidate_name = result.get("method")
+    candidate_events = result.get("events", {})
+    candidate_debug = result.get("debug", {})
+    vote = result.get("vote") if isinstance(result.get("vote"), dict) else {}
+    sequence_ranked = result.get("sequenceRanked") if isinstance(result.get("sequenceRanked"), list) else []
     errors = _event_errors(candidate_events, labels)
     total = sum(value for value in errors.values() if value is not None)
     compact = " ".join(f"{key}={candidate_events.get(key)}" for key in EVENT_KEYS)
@@ -1649,6 +1672,45 @@ def _warn_label_anomalies(labels: Dict[str, Any], body_payload: Optional[Dict[st
             print(f"label warning: {key}={label_time} exceeds body max time {round(max_time)}ms")
 
 
+def _format_events_compact(events: Dict[str, Any]) -> str:
+    return ",".join(f"{key.replace('Ms', '')}={events.get(key)}" for key in EVENT_KEYS)
+
+
+def print_selector_summary(fixtures: list[Path]) -> int:
+    print("fixture\tviewpoint\tmethod\tstatus\ttotalErrorMs\tevents")
+    exit_code = 0
+    for fixture_path in fixtures:
+        try:
+            fixture = _load_json(fixture_path)
+            labels = fixture.get("labels") if isinstance(fixture.get("labels"), dict) else {}
+            tolerance_ms = _safe_float(fixture.get("toleranceMs"), 80.0)
+            artifacts = fixture.get("artifacts") if isinstance(fixture.get("artifacts"), dict) else {}
+            body_path = _resolve_path(artifacts.get("bodyPath"), fixture_path.parent)
+            viewpoint = str(fixture.get("viewpoint") or "unknown")
+            if not body_path or not body_path.exists():
+                print(f"{fixture_path.stem}\t{viewpoint}\tmissing_body\tmissing\t-\t-")
+                continue
+            body_payload = _load_json(body_path)
+            result = _body_event_selector_result(body_payload)
+            if not result.get("available"):
+                print(f"{fixture_path.stem}\t{viewpoint}\tmissing\tmissing\t-\t-")
+                continue
+            events = result.get("events", {})
+            errors = _event_errors(events, labels)
+            status = _status(errors, tolerance_ms)
+            total = sum(value for value in errors.values() if value is not None)
+            if status != "pass":
+                exit_code = max(exit_code, 1)
+            print(
+                f"{fixture_path.stem}\t{viewpoint}\t{result.get('method')}\t{status}\t"
+                f"{total:.0f}\t{_format_events_compact(events)}"
+            )
+        except Exception as exc:
+            exit_code = max(exit_code, 1)
+            print(f"{fixture_path.stem}\t-\terror:{type(exc).__name__}\tfail\t-\t{exc}")
+    return exit_code
+
+
 def replay_fixture(fixture_path: Path, force: bool, allow_missing: bool, diagnostics: bool) -> int:
     fixture = _load_json(fixture_path)
     job_id = str(fixture.get("jobId") or fixture_path.stem)
@@ -1713,11 +1775,15 @@ def main() -> int:
     parser.add_argument("--no-force", action="store_true", help="Use normal NOT_SWING failures instead of force mode.")
     parser.add_argument("--allow-missing", action="store_true", help="Skip missing Pi artifacts without failing.")
     parser.add_argument("--diagnostics", action="store_true", help="Print remap and source-separated candidate diagnostics.")
+    parser.add_argument("--selector-summary", action="store_true", help="Print one-line body event selector results per fixture.")
     args = parser.parse_args()
 
     if not args.fixtures:
         print("No fixtures found. Add JSON files under fixtures/event_labels/ or pass paths explicitly.")
         return 2
+
+    if args.selector_summary:
+        return print_selector_summary(list(args.fixtures))
 
     exit_code = 0
     for idx, fixture in enumerate(args.fixtures):
