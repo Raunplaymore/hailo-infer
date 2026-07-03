@@ -4,6 +4,8 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from app.services.body_event_selector import select_body_events
+
 SERVICE7_LABELS = {
     0: "person",
     1: "player_ready",
@@ -34,6 +36,20 @@ class CoachError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
+
+
+def _normalize_viewpoint(value: object) -> str:
+    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+
+
+def _body_selector_is_operational(viewpoint: str, selector_result: Dict[str, Any]) -> bool:
+    if viewpoint != "down_the_line":
+        return False
+    if not selector_result.get("available"):
+        return False
+    # The offset fallback improved some weak cases but is not stable enough for
+    # production event timing yet.
+    return selector_result.get("method") != "feature-vote-offset-fallback"
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -1327,6 +1343,9 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     person_track = _select_best_track(frames, PERSON_LABELS)
     body_artifact = _load_body_artifact(job_id, body_path)
     wrist_track = _wrist_track_from_body(body_artifact)
+    viewpoint = _normalize_viewpoint(meta.get("viewpoint") or (body_artifact or {}).get("viewpoint"))
+    body_selector = select_body_events(body_artifact)
+    use_body_selector = _body_selector_is_operational(viewpoint, body_selector)
 
     motion_track, motion_source = _choose_motion_track(club_head_track, handle_track, club_track)
 
@@ -1348,6 +1367,13 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         wrist_track,
         club_head_track,
     )
+    body_selector_events = body_selector.get("events") if isinstance(body_selector.get("events"), dict) else {}
+    if use_body_selector:
+        address_idx = _nearest_track_index_by_time(motion_track, _safe_float(body_selector_events.get("addressMs"), 0.0))
+        top_idx = _nearest_track_index_by_time(motion_track, _safe_float(body_selector_events.get("topMs"), 0.0))
+        impact_idx = _nearest_track_index_by_time(motion_track, _safe_float(body_selector_events.get("impactMs"), 0.0))
+        finish_idx = _nearest_track_index_by_time(motion_track, _safe_float(body_selector_events.get("finishMs"), 0.0))
+        event_source = f"body_selector_down_the_line:{body_selector.get('method')}"
     wrist_impact = _find_impact_from_wrist_track(wrist_track, wrist_top, club_head_track) if wrist_top else None
     wrist_finish = _find_finish_from_wrist_track(wrist_track, wrist_impact) if wrist_impact else None
     if impact_idx is None and EVENT_FALLBACK_ENABLED:
@@ -1380,6 +1406,11 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     top_ms = _safe_int(motion_track[top_idx].get("t"), top_idx * (1000 // fps))
     impact_ms = _safe_int(motion_track[impact_idx].get("t"), impact_idx * (1000 // fps))
     finish_ms = _safe_int(motion_track[finish_idx].get("t"), finish_idx * (1000 // fps))
+    if use_body_selector:
+        address_ms = _safe_int(body_selector_events.get("addressMs"), address_ms)
+        top_ms = _safe_int(body_selector_events.get("topMs"), top_ms)
+        impact_ms = _safe_int(body_selector_events.get("impactMs"), impact_ms)
+        finish_ms = _safe_int(body_selector_events.get("finishMs"), finish_ms)
 
     dx = motion_track[impact_idx]["x"] - motion_track[top_idx]["x"]
     dy = motion_track[impact_idx]["y"] - motion_track[top_idx]["y"]
@@ -1482,6 +1513,11 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "points": float(len(motion_track)),
             "motionSource": motion_source,
             "eventSource": event_source,
+            "viewpoint": viewpoint or "unknown",
+            "bodySelectorMethod": body_selector.get("method") if body_selector.get("available") else None,
+            "bodySelectorUsed": bool(use_body_selector),
+            "bodySelectorEvents": body_selector_events if body_selector.get("available") else None,
+            "bodySelectorDebug": body_selector.get("debug") if body_selector.get("available") else None,
             "wristPoints": float(len(wrist_track)),
             "wristSources": wrist_sources,
             "wristTopMs": float(wrist_top.get("t")) if wrist_top else None,
