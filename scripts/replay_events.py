@@ -1047,19 +1047,46 @@ def _feature_sequence_events(
     }
 
 
-def _print_feature_sequence_experiment(
-    body_payload: Optional[Dict[str, Any]],
-    labels: Dict[str, Any],
-    tolerance_ms: float,
-) -> None:
-    print("\nexperiment body-feature-sequence")
+SEQUENCE_FEATURE_PRIORITIES = {
+    "left_elbow_y/local_max": 0.0,
+    "shoulder_width/local_max": 0.2,
+    "nose_y/local_max": 0.35,
+    "ankle_mid_x/local_max": 0.45,
+    "left_forearm_angle/local_max": 0.55,
+    "left_upper_arm_angle/local_max": 0.65,
+    "hip_line_angle/local_max": 0.8,
+    "right_upper_arm_angle/local_min": 0.9,
+}
+
+
+def _sequence_internal_score(events: Dict[str, Any], debug: Dict[str, Any]) -> float:
+    address = _safe_float(events.get("addressMs"), 0.0)
+    top = _safe_float(events.get("topMs"), address)
+    impact = _safe_float(events.get("impactMs"), top)
+    finish = _safe_float(events.get("finishMs"), impact)
+    top_gap = top - address
+    down_gap = impact - top
+    finish_gap = finish - impact
+    if top_gap <= 0 or down_gap <= 0 or finish_gap <= 0:
+        return float("inf")
+    target_top_gap = 70.0 if address < 100.0 else 340.0
+    feature_penalty = SEQUENCE_FEATURE_PRIORITIES.get(str(debug.get("feature")), 1.2)
+    return (
+        feature_penalty
+        + abs(top_gap - target_top_gap) / 220.0
+        + abs(down_gap - 150.0) / 180.0
+        + abs(finish_gap - 310.0) / 260.0
+        - min(0.4, _safe_float(debug.get("candidateCount"), 0.0) / 40.0)
+    )
+
+
+def _feature_sequence_ranked(body_payload: Optional[Dict[str, Any]]) -> list[tuple[float, Dict[str, Any], Dict[str, Any]]]:
     feature_tracks = _body_feature_tracks(body_payload)
     clusters = _feature_vote_clusters(body_payload, band_ms=70.0)
     if not feature_tracks or not clusters:
-        print("  missing")
-        return
+        return []
 
-    scored: list[tuple[float, Dict[str, Any], Dict[str, Any]]] = []
+    ranked: list[tuple[float, Dict[str, Any], Dict[str, Any]]] = []
     for cluster in clusters[:10]:
         start_t = _safe_float(cluster.get("t"), 0.0)
         for feature_name, kind, _weight in FEATURE_VOTE_RULES:
@@ -1067,18 +1094,90 @@ def _print_feature_sequence_experiment(
             if not candidate.get("available"):
                 continue
             events = candidate["events"]
-            errors = _event_errors(events, labels)
-            total = sum(value for value in errors.values() if value is not None)
-            scored.append((total, events, candidate.get("debug", {})))
+            debug = candidate.get("debug", {})
+            ranked.append((_sequence_internal_score(events, debug), events, debug))
+    ranked.sort(key=lambda item: item[0])
+    return ranked
 
-    if not scored:
+
+def _print_feature_sequence_experiment(
+    body_payload: Optional[Dict[str, Any]],
+    labels: Dict[str, Any],
+    tolerance_ms: float,
+) -> None:
+    print("\nexperiment body-feature-sequence")
+    ranked = _feature_sequence_ranked(body_payload)
+    if not ranked:
         print("  missing")
         return
-    for total, events, debug in sorted(scored, key=lambda item: item[0])[:10]:
+    scored = []
+    for internal_score, events, debug in ranked:
+        errors = _event_errors(events, labels)
+        total = sum(value for value in errors.values() if value is not None)
+        scored.append((total, internal_score, events, debug))
+    for total, internal_score, events, debug in sorted(scored, key=lambda item: item[0])[:10]:
         errors = _event_errors(events, labels)
         compact = " ".join(f"{key}={events.get(key)}" for key in EVENT_KEYS)
         print(f"  {_status(errors, tolerance_ms)} {compact} totalError={total:.0f}ms")
-        print(f"    debug={json.dumps(debug, ensure_ascii=False, sort_keys=True)}")
+        print(f"    score={internal_score:.2f} debug={json.dumps(debug, ensure_ascii=False, sort_keys=True)}")
+
+
+def _print_body_event_selector_experiment(
+    body_payload: Optional[Dict[str, Any]],
+    labels: Dict[str, Any],
+    tolerance_ms: float,
+) -> None:
+    print("\nexperiment body-event-selector")
+    sequence_ranked = _feature_sequence_ranked(body_payload)
+    vote = _feature_vote_events(body_payload)
+    candidate_name = None
+    candidate_events = None
+    candidate_debug: Dict[str, Any] = {}
+
+    if sequence_ranked:
+        sequence_score, sequence_events, sequence_debug = sequence_ranked[0]
+        start_t = _safe_float(sequence_events.get("addressMs"), 0.0)
+        if start_t >= 120.0 and sequence_score <= 2.6:
+            candidate_name = "feature-sequence"
+            candidate_events = sequence_events
+            candidate_debug = {"score": round(sequence_score, 3), **sequence_debug}
+
+    if candidate_events is None and vote.get("available"):
+        events = vote.get("events", {})
+        top_t = _safe_float(events.get("topMs"), 9999.0)
+        if top_t <= 140.0:
+            candidate_name = "feature-vote-early"
+            candidate_events = events
+            candidate_debug = vote.get("debug", {})
+
+    if candidate_events is None:
+        clusters = vote.get("clusters") if isinstance(vote.get("clusters"), list) else []
+        fallback: list[tuple[float, Dict[str, Any], Dict[str, Any]]] = []
+        for cluster in clusters[:10]:
+            start_t = _safe_float(cluster.get("t"), 0.0)
+            candidate = _feature_vote_events_from_clusters(clusters, start_t, use_offset_model=True)
+            if not candidate.get("available"):
+                continue
+            events = candidate["events"]
+            top_gap = _safe_float(events.get("topMs"), 0.0) - _safe_float(events.get("addressMs"), 0.0)
+            impact_gap = _safe_float(events.get("impactMs"), 0.0) - _safe_float(events.get("topMs"), 0.0)
+            finish_gap = _safe_float(events.get("finishMs"), 0.0) - _safe_float(events.get("impactMs"), 0.0)
+            score = abs(top_gap - 360.0) / 260.0 + abs(impact_gap - 170.0) / 220.0 + abs(finish_gap - 320.0) / 320.0
+            fallback.append((score, events, candidate.get("debug", {})))
+        if fallback:
+            score, events, debug = sorted(fallback, key=lambda item: item[0])[0]
+            candidate_name = "feature-vote-offset-fallback"
+            candidate_events = events
+            candidate_debug = {"score": round(score, 3), **debug}
+
+    if candidate_events is None:
+        print("  missing")
+        return
+    errors = _event_errors(candidate_events, labels)
+    total = sum(value for value in errors.values() if value is not None)
+    compact = " ".join(f"{key}={candidate_events.get(key)}" for key in EVENT_KEYS)
+    print(f"  {candidate_name}: {_status(errors, tolerance_ms)} {compact} totalError={total:.0f}ms")
+    print(f"    debug={json.dumps(candidate_debug, ensure_ascii=False, sort_keys=True)}")
 
 
 def _single_source_track(body_payload: Optional[Dict[str, Any]], source: str) -> list[Dict[str, Any]]:
@@ -1424,6 +1523,7 @@ def _print_body_diagnostics(
     _print_feature_vote_gated_experiment(body_payload, labels, tolerance_ms)
     _print_feature_vote_band_sweep_experiment(body_payload, labels, tolerance_ms)
     _print_feature_sequence_experiment(body_payload, labels, tolerance_ms)
+    _print_body_event_selector_experiment(body_payload, labels, tolerance_ms)
     _print_label_address_cropped_experiment(body_payload, labels, tolerance_ms)
 
 
