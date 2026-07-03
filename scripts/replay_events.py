@@ -998,6 +998,89 @@ def _print_feature_vote_band_sweep_experiment(
         print(f"    debug={json.dumps(debug, ensure_ascii=False, sort_keys=True)}")
 
 
+def _feature_sequence_events(
+    feature_name: str,
+    kind: str,
+    feature_tracks: Dict[str, list[Dict[str, Any]]],
+    start_t: float,
+) -> Dict[str, Any]:
+    track = feature_tracks.get(feature_name)
+    if not track:
+        return {"available": False}
+    candidates = [
+        candidate_t
+        for candidate_t in _probe_candidate_times(track, kind)
+        if candidate_t >= start_t + 20.0
+    ]
+    if len(candidates) < 3:
+        return {"available": False}
+
+    target_top_offset = 70.0 if start_t < 100.0 else 340.0
+    top_pool = [candidate_t for candidate_t in candidates if start_t + 20.0 <= candidate_t <= start_t + 760.0]
+    if not top_pool:
+        return {"available": False}
+    top_t = min(top_pool, key=lambda candidate_t: abs((candidate_t - start_t) - target_top_offset))
+
+    impact_pool = [candidate_t for candidate_t in candidates if top_t + 70.0 <= candidate_t <= top_t + 420.0]
+    if not impact_pool:
+        return {"available": False}
+    impact_t = min(impact_pool, key=lambda candidate_t: abs((candidate_t - top_t) - 170.0))
+
+    finish_pool = [candidate_t for candidate_t in candidates if impact_t + 130.0 <= candidate_t <= impact_t + 620.0]
+    if not finish_pool:
+        return {"available": False}
+    finish_t = min(finish_pool, key=lambda candidate_t: abs((candidate_t - impact_t) - 320.0))
+
+    return {
+        "available": True,
+        "events": {
+            "addressMs": round(start_t),
+            "topMs": round(top_t),
+            "impactMs": round(impact_t),
+            "finishMs": round(finish_t),
+        },
+        "debug": {
+            "feature": f"{feature_name}/{kind}",
+            "candidateCount": len(candidates),
+            "startMs": round(start_t),
+        },
+    }
+
+
+def _print_feature_sequence_experiment(
+    body_payload: Optional[Dict[str, Any]],
+    labels: Dict[str, Any],
+    tolerance_ms: float,
+) -> None:
+    print("\nexperiment body-feature-sequence")
+    feature_tracks = _body_feature_tracks(body_payload)
+    clusters = _feature_vote_clusters(body_payload, band_ms=70.0)
+    if not feature_tracks or not clusters:
+        print("  missing")
+        return
+
+    scored: list[tuple[float, Dict[str, Any], Dict[str, Any]]] = []
+    for cluster in clusters[:10]:
+        start_t = _safe_float(cluster.get("t"), 0.0)
+        for feature_name, kind, _weight in FEATURE_VOTE_RULES:
+            candidate = _feature_sequence_events(feature_name, kind, feature_tracks, start_t)
+            if not candidate.get("available"):
+                continue
+            events = candidate["events"]
+            errors = _event_errors(events, labels)
+            total = sum(value for value in errors.values() if value is not None)
+            scored.append((total, events, candidate.get("debug", {})))
+
+    if not scored:
+        print("  missing")
+        return
+    for total, events, debug in sorted(scored, key=lambda item: item[0])[:10]:
+        errors = _event_errors(events, labels)
+        compact = " ".join(f"{key}={events.get(key)}" for key in EVENT_KEYS)
+        print(f"  {_status(errors, tolerance_ms)} {compact} totalError={total:.0f}ms")
+        print(f"    debug={json.dumps(debug, ensure_ascii=False, sort_keys=True)}")
+
+
 def _single_source_track(body_payload: Optional[Dict[str, Any]], source: str) -> list[Dict[str, Any]]:
     frames = body_payload.get("frames") if isinstance(body_payload, dict) else None
     if not isinstance(frames, list):
@@ -1340,6 +1423,7 @@ def _print_body_diagnostics(
     _print_feature_vote_experiment(body_payload, labels, tolerance_ms)
     _print_feature_vote_gated_experiment(body_payload, labels, tolerance_ms)
     _print_feature_vote_band_sweep_experiment(body_payload, labels, tolerance_ms)
+    _print_feature_sequence_experiment(body_payload, labels, tolerance_ms)
     _print_label_address_cropped_experiment(body_payload, labels, tolerance_ms)
 
 
