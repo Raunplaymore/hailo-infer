@@ -1677,7 +1677,7 @@ def _format_events_compact(events: Dict[str, Any]) -> str:
 
 
 def print_selector_summary(fixtures: list[Path]) -> int:
-    print("fixture\tviewpoint\tmethod\tstatus\ttotalErrorMs\tevents")
+    print("fixture\tviewpoint\tmethod\tstatus\ttotalErrorMs\trecommended\tevents")
     exit_code = 0
     for fixture_path in fixtures:
         try:
@@ -1688,26 +1688,33 @@ def print_selector_summary(fixtures: list[Path]) -> int:
             body_path = _resolve_path(artifacts.get("bodyPath"), fixture_path.parent)
             viewpoint = str(fixture.get("viewpoint") or "unknown")
             if not body_path or not body_path.exists():
-                print(f"{fixture_path.stem}\t{viewpoint}\tmissing_body\tmissing\t-\t-")
+                print(f"{fixture_path.stem}\t{viewpoint}\tmissing_body\tmissing\t-\tmissing_body\t-")
                 continue
             body_payload = _load_json(body_path)
             result = _body_event_selector_result(body_payload)
             if not result.get("available"):
-                print(f"{fixture_path.stem}\t{viewpoint}\tmissing\tmissing\t-\t-")
+                recommended = "use_face_on_phase_turnaround" if viewpoint == "face_on" else "selector_missing"
+                print(f"{fixture_path.stem}\t{viewpoint}\tmissing\tmissing\t-\t{recommended}\t-")
                 continue
             events = result.get("events", {})
             errors = _event_errors(events, labels)
             status = _status(errors, tolerance_ms)
             total = sum(value for value in errors.values() if value is not None)
+            if viewpoint == "face_on":
+                recommended = "use_face_on_phase_turnaround"
+            elif status == "pass":
+                recommended = "use_body_selector"
+            else:
+                recommended = "low_confidence_body_selector"
             if status != "pass":
                 exit_code = max(exit_code, 1)
             print(
                 f"{fixture_path.stem}\t{viewpoint}\t{result.get('method')}\t{status}\t"
-                f"{total:.0f}\t{_format_events_compact(events)}"
+                f"{total:.0f}\t{recommended}\t{_format_events_compact(events)}"
             )
         except Exception as exc:
             exit_code = max(exit_code, 1)
-            print(f"{fixture_path.stem}\t-\terror:{type(exc).__name__}\tfail\t-\t{exc}")
+            print(f"{fixture_path.stem}\t-\terror:{type(exc).__name__}\tfail\t-\terror\t{exc}")
     return exit_code
 
 
