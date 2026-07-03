@@ -43,6 +43,7 @@ def _normalize_viewpoint(value: object) -> str:
 
 
 def _body_selector_is_operational(viewpoint: str, selector_result: Dict[str, Any]) -> bool:
+    viewpoint = viewpoint or "unknown"
     if not selector_result.get("available"):
         return False
     # The offset fallback improved some weak cases but is not stable enough for
