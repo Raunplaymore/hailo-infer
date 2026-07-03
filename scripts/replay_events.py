@@ -1138,8 +1138,13 @@ def _print_body_event_selector_experiment(
 
     if vote.get("available"):
         events = vote.get("events", {})
+        address_t = _safe_float(events.get("addressMs"), 9999.0)
         top_t = _safe_float(events.get("topMs"), 9999.0)
-        if top_t <= 140.0:
+        impact_t = _safe_float(events.get("impactMs"), 9999.0)
+        finish_t = _safe_float(events.get("finishMs"), 9999.0)
+        # Short swings can have top almost immediately after address. Preserve that vote
+        # before the generic down-the-line fallback drifts into follow-through clusters.
+        if address_t <= 120.0 and top_t <= 260.0 and impact_t <= 700.0 and finish_t <= 1050.0:
             candidate_name = "feature-vote-early"
             candidate_events = events
             candidate_debug = vote.get("debug", {})
@@ -1180,6 +1185,22 @@ def _print_body_event_selector_experiment(
     compact = " ".join(f"{key}={candidate_events.get(key)}" for key in EVENT_KEYS)
     print(f"  {candidate_name}: {_status(errors, tolerance_ms)} {compact} totalError={total:.0f}ms")
     print(f"    debug={json.dumps(candidate_debug, ensure_ascii=False, sort_keys=True)}")
+
+    if sequence_ranked:
+        debug_rows = []
+        for internal_score, events, debug in sequence_ranked[:8]:
+            candidate_errors = _event_errors(events, labels)
+            candidate_total = sum(value for value in candidate_errors.values() if value is not None)
+            debug_rows.append(
+                {
+                    "score": round(internal_score, 3),
+                    "totalError": round(candidate_total),
+                    "events": {key: events.get(key) for key in EVENT_KEYS},
+                    "feature": debug.get("feature"),
+                    "startMs": debug.get("startMs"),
+                }
+            )
+        print(f"    sequenceRanked={json.dumps(debug_rows, ensure_ascii=False)}")
 
 
 def _single_source_track(body_payload: Optional[Dict[str, Any]], source: str) -> list[Dict[str, Any]]:
