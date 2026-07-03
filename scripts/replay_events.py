@@ -1071,8 +1071,10 @@ def _sequence_internal_score(events: Dict[str, Any], debug: Dict[str, Any]) -> f
         return float("inf")
     target_top_gap = 70.0 if address < 100.0 else 340.0
     feature_penalty = SEQUENCE_FEATURE_PRIORITIES.get(str(debug.get("feature")), 1.2)
+    late_start_penalty = max(0.0, address - 120.0) / 520.0
     return (
         feature_penalty
+        + late_start_penalty
         + abs(top_gap - target_top_gap) / 220.0
         + abs(down_gap - 150.0) / 180.0
         + abs(finish_gap - 310.0) / 260.0
@@ -1134,21 +1136,21 @@ def _print_body_event_selector_experiment(
     candidate_events = None
     candidate_debug: Dict[str, Any] = {}
 
-    if sequence_ranked:
-        sequence_score, sequence_events, sequence_debug = sequence_ranked[0]
-        start_t = _safe_float(sequence_events.get("addressMs"), 0.0)
-        if start_t >= 120.0 and sequence_score <= 2.6:
-            candidate_name = "feature-sequence"
-            candidate_events = sequence_events
-            candidate_debug = {"score": round(sequence_score, 3), **sequence_debug}
-
-    if candidate_events is None and vote.get("available"):
+    if vote.get("available"):
         events = vote.get("events", {})
         top_t = _safe_float(events.get("topMs"), 9999.0)
         if top_t <= 140.0:
             candidate_name = "feature-vote-early"
             candidate_events = events
             candidate_debug = vote.get("debug", {})
+
+    if sequence_ranked:
+        sequence_score, sequence_events, sequence_debug = sequence_ranked[0]
+        start_t = _safe_float(sequence_events.get("addressMs"), 0.0)
+        if candidate_events is None and start_t >= 120.0 and sequence_score <= 2.6:
+            candidate_name = "feature-sequence"
+            candidate_events = sequence_events
+            candidate_debug = {"score": round(sequence_score, 3), **sequence_debug}
 
     if candidate_events is None:
         clusters = vote.get("clusters") if isinstance(vote.get("clusters"), list) else []
