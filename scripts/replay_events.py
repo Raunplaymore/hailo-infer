@@ -1145,13 +1145,28 @@ def _print_body_event_selector_experiment(
         top_weight = _safe_float(vote.get("debug", {}).get("topWeight"), 0.0)
         # Short swings can have top almost immediately after address. Preserve that vote
         # before the generic down-the-line fallback drifts into follow-through clusters.
-        if address_t <= 120.0 and top_t <= 260.0 and impact_t <= 700.0 and finish_t <= 1050.0 and top_weight >= 9.0:
+        if address_t <= 120.0 and top_t <= 260.0 and impact_t <= 760.0 and finish_t <= 1050.0 and top_weight >= 9.0:
             candidate_name = "feature-vote-early"
             candidate_events = events
             candidate_debug = vote.get("debug", {})
 
     if sequence_ranked:
         sequence_score, sequence_events, sequence_debug = sequence_ranked[0]
+        if (
+            str(sequence_debug.get("feature")) == "left_elbow_y/local_max"
+            and _safe_float(sequence_debug.get("startMs"), 0.0) < 300.0
+        ):
+            shoulder_alternative = next(
+                (
+                    item
+                    for item in sequence_ranked
+                    if str(item[2].get("feature")) == "shoulder_width/local_max"
+                    and item[0] <= sequence_score + 0.55
+                ),
+                None,
+            )
+            if shoulder_alternative:
+                sequence_score, sequence_events, sequence_debug = shoulder_alternative
         start_t = _safe_float(sequence_events.get("addressMs"), 0.0)
         if candidate_events is None and start_t >= 120.0 and sequence_score <= 2.6:
             candidate_name = "feature-sequence"
