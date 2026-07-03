@@ -1138,6 +1138,48 @@ def _print_body_event_selector_experiment(
 
     if vote.get("available"):
         events = vote.get("events", {})
+        clusters = vote.get("clusters") if isinstance(vote.get("clusters"), list) else []
+        if clusters:
+            first_cluster = clusters[0]
+            first_t = _safe_float(first_cluster.get("t"), 9999.0)
+            first_weight = _safe_float(first_cluster.get("weight"), 0.0)
+            if first_t <= 120.0 and first_weight >= 9.0:
+                impact_candidates = [
+                    cluster
+                    for cluster in clusters
+                    if first_t + 300.0 <= _safe_float(cluster.get("t"), 0.0) <= first_t + 540.0
+                ]
+                impact_cluster = max(
+                    impact_candidates,
+                    key=lambda cluster: _safe_float(cluster.get("weight"), 0.0),
+                    default=None,
+                )
+                impact_t = _safe_float(impact_cluster.get("t"), 0.0) if impact_cluster else None
+                finish_cluster = None
+                if impact_t is not None:
+                    finish_candidates = [
+                        cluster
+                        for cluster in clusters
+                        if impact_t + 160.0 <= _safe_float(cluster.get("t"), 0.0) <= impact_t + 360.0
+                    ]
+                    finish_cluster = max(
+                        finish_candidates,
+                        key=lambda cluster: _safe_float(cluster.get("weight"), 0.0),
+                        default=None,
+                    )
+                if impact_cluster and finish_cluster:
+                    candidate_name = "feature-vote-early-top-cluster"
+                    candidate_events = {
+                        "addressMs": 0,
+                        "topMs": round(first_t),
+                        "impactMs": round(impact_t),
+                        "finishMs": round(_safe_float(finish_cluster.get("t"), 0.0)),
+                    }
+                    candidate_debug = {
+                        "topWeight": round(first_weight, 2),
+                        "impactWeight": round(_safe_float(impact_cluster.get("weight"), 0.0), 2),
+                        "finishWeight": round(_safe_float(finish_cluster.get("weight"), 0.0), 2),
+                    }
         address_t = _safe_float(events.get("addressMs"), 9999.0)
         top_t = _safe_float(events.get("topMs"), 9999.0)
         impact_t = _safe_float(events.get("impactMs"), 9999.0)
@@ -1145,7 +1187,14 @@ def _print_body_event_selector_experiment(
         top_weight = _safe_float(vote.get("debug", {}).get("topWeight"), 0.0)
         # Short swings can have top almost immediately after address. Preserve that vote
         # before the generic down-the-line fallback drifts into follow-through clusters.
-        if address_t <= 120.0 and top_t <= 260.0 and impact_t <= 760.0 and finish_t <= 1050.0 and top_weight >= 9.0:
+        if (
+            candidate_events is None
+            and address_t <= 120.0
+            and top_t <= 260.0
+            and impact_t <= 760.0
+            and finish_t <= 1050.0
+            and top_weight >= 9.0
+        ):
             candidate_name = "feature-vote-early"
             candidate_events = events
             candidate_debug = vote.get("debug", {})
@@ -1166,7 +1215,17 @@ def _print_body_event_selector_experiment(
                 None,
             )
             if shoulder_alternative:
-                sequence_score, sequence_events, sequence_debug = shoulder_alternative
+                shoulder_score = shoulder_alternative[0]
+                shoulder_alternatives = [
+                    item
+                    for item in sequence_ranked
+                    if str(item[2].get("feature")) == "shoulder_width/local_max"
+                    and item[0] <= shoulder_score + 0.2
+                ]
+                sequence_score, sequence_events, sequence_debug = min(
+                    shoulder_alternatives,
+                    key=lambda item: _safe_float(item[2].get("startMs"), 9999.0),
+                )
         start_t = _safe_float(sequence_events.get("addressMs"), 0.0)
         if candidate_events is None and start_t >= 120.0 and sequence_score <= 2.6:
             candidate_name = "feature-sequence"
