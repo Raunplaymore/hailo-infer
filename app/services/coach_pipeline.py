@@ -43,13 +43,21 @@ def _normalize_viewpoint(value: object) -> str:
 
 
 def _body_selector_is_operational(viewpoint: str, selector_result: Dict[str, Any]) -> bool:
-    if viewpoint != "down_the_line":
-        return False
     if not selector_result.get("available"):
         return False
     # The offset fallback improved some weak cases but is not stable enough for
     # production event timing yet.
-    return selector_result.get("method") != "feature-vote-offset-fallback"
+    if selector_result.get("method") == "feature-vote-offset-fallback":
+        return False
+    if viewpoint == "down_the_line":
+        return True
+    if viewpoint == "unknown":
+        debug = selector_result.get("debug") if isinstance(selector_result.get("debug"), dict) else {}
+        return (
+            selector_result.get("method") == "feature-vote-early-top-cluster"
+            or debug.get("feature") == "shoulder_width/local_max"
+        )
+    return False
 
 
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
