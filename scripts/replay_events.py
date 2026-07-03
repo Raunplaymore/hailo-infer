@@ -1142,9 +1142,10 @@ def _print_body_event_selector_experiment(
         top_t = _safe_float(events.get("topMs"), 9999.0)
         impact_t = _safe_float(events.get("impactMs"), 9999.0)
         finish_t = _safe_float(events.get("finishMs"), 9999.0)
+        top_weight = _safe_float(vote.get("debug", {}).get("topWeight"), 0.0)
         # Short swings can have top almost immediately after address. Preserve that vote
         # before the generic down-the-line fallback drifts into follow-through clusters.
-        if address_t <= 120.0 and top_t <= 260.0 and impact_t <= 700.0 and finish_t <= 1050.0:
+        if address_t <= 120.0 and top_t <= 260.0 and impact_t <= 700.0 and finish_t <= 1050.0 and top_weight >= 9.0:
             candidate_name = "feature-vote-early"
             candidate_events = events
             candidate_debug = vote.get("debug", {})
@@ -1185,6 +1186,12 @@ def _print_body_event_selector_experiment(
     compact = " ".join(f"{key}={candidate_events.get(key)}" for key in EVENT_KEYS)
     print(f"  {candidate_name}: {_status(errors, tolerance_ms)} {compact} totalError={total:.0f}ms")
     print(f"    debug={json.dumps(candidate_debug, ensure_ascii=False, sort_keys=True)}")
+    if vote.get("available"):
+        print(
+            "    voteEvents="
+            f"{json.dumps(vote.get('events', {}), ensure_ascii=False, sort_keys=True)} "
+            f"voteDebug={json.dumps(vote.get('debug', {}), ensure_ascii=False, sort_keys=True)}"
+        )
 
     if sequence_ranked:
         debug_rows = []
