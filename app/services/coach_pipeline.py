@@ -6,6 +6,8 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.services.body_event_selector import select_body_events
 
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v2"
+
 SERVICE7_LABELS = {
     0: "person",
     1: "player_ready",
@@ -1510,12 +1512,13 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         "summary": summary,
         "coachSummary": coach_summary,
         "confidence": confidence,
+        "analysisVersion": COACH_ANALYSIS_VERSION,
         "meta": {
             "fps": fps,
             "width": meta.get("width"),
             "height": meta.get("height"),
             "durationMs": duration_ms,
-            "analysisVersion": "hailo-coach-service7-v1",
+            "analysisVersion": COACH_ANALYSIS_VERSION,
             "modelLabels": SERVICE7_LABELS,
         },
         "debug": {

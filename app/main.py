@@ -10,7 +10,7 @@ from app.schemas import (
     JobStatusResponse,
 )
 from app.services.body_pipeline import BodyPipelineError, analyze_body_video
-from app.services.coach_pipeline import CoachError, analyze_meta
+from app.services.coach_pipeline import COACH_ANALYSIS_VERSION, CoachError, analyze_meta
 from app.services.job_store import JobStore
 from app.services.meta_loader import MetaLoadError, load_meta
 
@@ -27,6 +27,10 @@ def _is_complete_coach_result(result: dict | None) -> bool:
     if "analysis" in result or "progress" in result:
         return False
     if result.get("ok") is not True:
+        return False
+    result_version = result.get("analysisVersion")
+    meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
+    if result_version != COACH_ANALYSIS_VERSION and meta.get("analysisVersion") != COACH_ANALYSIS_VERSION:
         return False
     metrics = result.get("metrics")
     events = result.get("events")
