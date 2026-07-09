@@ -6,7 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.services.body_event_selector import select_body_events
 
-COACH_ANALYSIS_VERSION = "hailo-coach-service7-v2"
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v3"
 
 SERVICE7_LABELS = {
     0: "person",

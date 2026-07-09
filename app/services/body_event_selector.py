@@ -477,18 +477,31 @@ def early_top_cluster_candidate(clusters: list[Dict[str, Any]]) -> tuple[Optiona
     finish_cluster = max(finish_candidates, key=lambda cluster: _safe_float(cluster.get("weight"), 0.0), default=None)
     if not finish_cluster:
         return None, {}
+    finish_t = _safe_float(finish_cluster.get("t"), 0.0)
+    top_t = _safe_float(top_cluster.get("t"), first_t)
+
+    original_impact_t = impact_t
+    impact_refined = False
+    if refined_top:
+        ratio_impact_t = top_t + (finish_t - top_t) * 0.48
+        latest_safe_impact_t = finish_t - 120.0
+        if impact_t < ratio_impact_t <= latest_safe_impact_t:
+            impact_t = ratio_impact_t
+            impact_refined = True
 
     return {
         "addressMs": 0,
-        "topMs": round(_safe_float(top_cluster.get("t"), first_t)),
+        "topMs": round(top_t),
         "impactMs": round(impact_t),
-        "finishMs": round(_safe_float(finish_cluster.get("t"), 0.0)),
+        "finishMs": round(finish_t),
     }, {
         "topWeight": round(_safe_float(top_cluster.get("weight"), first_weight), 2),
         "impactWeight": round(_safe_float(impact_cluster.get("weight"), 0.0), 2),
         "finishWeight": round(_safe_float(finish_cluster.get("weight"), 0.0), 2),
         "originalTopMs": round(first_t),
         "originalTopWeight": round(first_weight, 2),
+        "originalImpactMs": round(original_impact_t),
+        "impactRefined": impact_refined,
         "topRefined": refined_top,
     }
 
