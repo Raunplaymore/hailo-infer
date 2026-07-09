@@ -5,8 +5,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.services.body_event_selector import select_body_events
+from app.services.coach_commentary import build_coach_comments
 
-COACH_ANALYSIS_VERSION = "hailo-coach-service7-v3"
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v4"
 
 SERVICE7_LABELS = {
     0: "person",
@@ -1296,41 +1297,19 @@ def _coach_comments(
     impact_stability: Dict[str, object],
     readiness: Dict[str, object],
     tracking: Dict[str, object],
+    ball: Optional[Dict[str, object]] = None,
+    swing_plane: Optional[Dict[str, object]] = None,
 ) -> List[str]:
-    comments: List[str] = []
-
-    ratio = _safe_float(tempo.get("ratio"), 0.0)
-    if ratio > 0:
-        if ratio < 2.0:
-            comments.append(f"템포가 {ratio}:1로 빠른 편입니다. 백스윙 탑에서 전환을 조금 더 분리해 보세요.")
-        elif ratio > 4.0:
-            comments.append(f"템포가 {ratio}:1로 긴 편입니다. 백스윙 길이보다 다운스윙 리듬을 일정하게 만드는 쪽을 우선하세요.")
-        else:
-            comments.append(f"템포는 {ratio}:1로 전신 스윙 분석 기준에서 사용할 수 있는 범위입니다.")
-
-    for metric in (shaft_plane, backswing):
-        comment = metric.get("comment")
-        if isinstance(comment, str) and comment:
-            comments.append(comment)
-
-    if impact_stability.get("label") == "unstable":
-        comments.append("임팩트 구간 클럽 헤드 위치 변동이 큽니다. 공 주변 3~4프레임에서 손목 릴리스 타이밍을 확인하세요.")
-    elif impact_stability.get("label") == "stable":
-        comments.append("임팩트 구간 클럽 헤드 추적은 비교적 안정적입니다.")
-
-    if readiness.get("label") == "not_ready":
-        comments.append("어드레스 준비 상태가 불안정하게 감지되었습니다. 분석 시작 프레임을 어드레스 이후로 맞추는 편이 좋습니다.")
-
-    if tracking.get("personFrames", 0) == 0:
-        comments.append("person 검출이 없어 전신 기준 보정이 약합니다. 몸 전체가 화면에 크게 보이도록 거리와 구도를 먼저 조정하세요.")
-
-    if tracking.get("ballFrames", 0) == 0:
-        comments.append("golf_ball 검출이 없어 발사 방향/출발 조건 해석은 현재 신뢰할 수 없습니다.")
-
-    if tracking.get("label") == "weak":
-        comments.append("추적 품질이 낮습니다. 전신이 프레임 안에 들어오고 클럽 헤드가 배경과 분리되도록 조명과 거리부터 조정하세요.")
-
-    return comments[:6]
+    return build_coach_comments(
+        tempo,
+        shaft_plane,
+        backswing,
+        impact_stability,
+        readiness,
+        tracking,
+        ball or {},
+        swing_plane or {},
+    )
 
 
 def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: Optional[str] = None) -> Dict[str, object]:
@@ -1473,7 +1452,12 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         2,
     )
 
-    coach_summary = _coach_comments(tempo, shaft, backswing, impact_stability, readiness, tracking)
+    swing_plane = {
+        "label": swing_label,
+        "confidence": swing_conf,
+        "source": motion_source,
+    }
+    coach_summary = _coach_comments(tempo, shaft, backswing, impact_stability, readiness, tracking, ball, swing_plane)
     summary = f"service7 분석 완료: tempo {ratio}:1, shaft {shaft['label']}, backswing {backswing['label']}."
     duration_ms = _safe_int(meta.get("durationMs"), 0) or (_safe_int(frames[-1].get("_t_ms"), 0) if frames else 0)
 
@@ -1490,11 +1474,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "finishMs": finish_ms,
         },
         "metrics": {
-            "swingPlane": {
-                "label": swing_label,
-                "confidence": swing_conf,
-                "source": motion_source,
-            },
+            "swingPlane": swing_plane,
             "tempo": tempo,
             "impactStability": impact_stability,
             "shaftPlane": shaft,
