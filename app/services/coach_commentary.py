@@ -21,11 +21,20 @@ class CoachFinding:
     evidence: str
     interpretation: str
     action: str
+    priority: str = "확인"
+    drill: Optional[str] = None
+    checkpoint: Optional[str] = None
     caution: Optional[str] = None
 
     def comment(self) -> str:
-        suffix = f" {self.caution}" if self.caution else ""
-        return f"{self.evidence} {self.interpretation} {self.action}{suffix}"
+        parts = [f"[{self.priority}] {self.evidence}", self.interpretation, self.action]
+        if self.drill:
+            parts.append(f"드릴: {self.drill}")
+        if self.checkpoint:
+            parts.append(f"체크: {self.checkpoint}")
+        if self.caution:
+            parts.append(self.caution)
+        return " ".join(parts)
 
     def to_dict(self) -> Dict[str, object]:
         return {
@@ -33,9 +42,12 @@ class CoachFinding:
             "category": self.category,
             "severity": self.severity,
             "confidence": round(self.confidence, 2),
+            "priority": self.priority,
             "evidence": self.evidence,
             "interpretation": self.interpretation,
             "action": self.action,
+            "drill": self.drill,
+            "checkpoint": self.checkpoint,
             "caution": self.caution,
         }
 
@@ -92,6 +104,9 @@ def _tempo_finding(tempo: Dict[str, object]) -> Optional[CoachFinding]:
             evidence=f"템포가 {ratio}:1로 전환이 급합니다.",
             interpretation="탑에서 바로 손으로 내려치면 하체-몸통-팔-클럽 순서가 무너지기 쉽습니다.",
             action="탑에서 반 박자 멈춘 뒤 하체와 가슴 회전으로 다운스윙을 시작해 보세요.",
+            priority="전환 순서",
+            drill="탑에서 1초 정지 후 50% 속도로 하체-가슴-팔 순서로 내려오기 5회.",
+            checkpoint="다운스윙 첫 움직임이 손이 아니라 골반/가슴 회전으로 시작되는지 봅니다.",
         )
     if ratio < 2.4:
         return CoachFinding(
@@ -102,6 +117,9 @@ def _tempo_finding(tempo: Dict[str, object]) -> Optional[CoachFinding]:
             evidence=f"템포가 {ratio}:1로 빠른 편입니다.",
             interpretation="리듬 자체는 쓸 수 있지만 전환에서 손목 릴리스가 먼저 풀릴 가능성이 있습니다.",
             action="다운스윙 시작 때 손보다 가슴이 공 쪽으로 돌아오는 느낌을 우선하세요.",
+            priority="리듬 조절",
+            drill="3/4 스윙으로 백스윙은 그대로, 다운스윙 시작만 70% 속도로 낮춰 반복.",
+            checkpoint="임팩트 직전 손목이 급히 뒤집히지 않고 몸 앞에서 릴리스되는지 확인합니다.",
         )
     if ratio <= 3.6:
         return CoachFinding(
@@ -112,6 +130,8 @@ def _tempo_finding(tempo: Dict[str, object]) -> Optional[CoachFinding]:
             evidence=f"템포는 {ratio}:1로 사용할 수 있는 범위입니다.",
             interpretation="지금은 템포 자체보다 탑 이후 임팩트까지의 재현성이 더 중요합니다.",
             action="같은 탑 위치와 같은 다운스윙 리듬이 반복되는지 먼저 확인하세요.",
+            priority="유지",
+            checkpoint="반복 촬영에서 top-impact 간격이 크게 흔들리지 않는지 봅니다.",
         )
     if ratio <= 4.5:
         return CoachFinding(
@@ -122,6 +142,9 @@ def _tempo_finding(tempo: Dict[str, object]) -> Optional[CoachFinding]:
             evidence=f"템포가 {ratio}:1로 백스윙 대비 다운스윙이 짧습니다.",
             interpretation="탑에서 리듬이 멈추면 다운스윙을 급하게 보상하기 쉽습니다.",
             action="백스윙을 더 키우기보다 전환 이후 체중 이동과 회전이 끊기지 않게 연결하세요.",
+            priority="연결 리듬",
+            drill="연속 빈스윙 3회 뒤 바로 공 치기. 탑에서 정지하지 않는 느낌을 유지합니다.",
+            checkpoint="탑 이후 몸 회전이 멈춘 뒤 팔만 내려오는 구간이 있는지 확인합니다.",
         )
     return CoachFinding(
         key="tempo_excessively_slow",
@@ -131,6 +154,9 @@ def _tempo_finding(tempo: Dict[str, object]) -> Optional[CoachFinding]:
         evidence=f"템포가 {ratio}:1로 백스윙 시간이 과하게 깁니다.",
         interpretation="탑에서 정지한 뒤 다시 치는 패턴이면 스윙 전체 리듬이 끊길 수 있습니다.",
         action="3/4 스윙으로 백스윙과 다운스윙이 이어지는 연속 리듬을 먼저 맞추세요.",
+        priority="연결 리듬",
+        drill="메트로놈 느낌으로 하나-둘에 백스윙, 셋에 임팩트까지 연결.",
+        checkpoint="탑에서 클럽이 멈춘 뒤 다시 출발하는지 봅니다.",
     )
 
 
@@ -149,6 +175,9 @@ def _backswing_finding(backswing: Dict[str, object]) -> Optional[CoachFinding]:
             evidence=f"백스윙 크기가 작게 잡힙니다(travel {travel:.2f}).",
             interpretation="손만 작게 드는 패턴이면 파워와 다운스윙 여유가 줄어듭니다.",
             action="왼쪽 어깨가 턱 밑으로 들어오는 3/4 회전부터 확인하세요.",
+            priority="백스윙 크기",
+            drill="공 없이 3/4 탑 위치를 만들고 2초 유지한 뒤 내려오기.",
+            checkpoint="손만 올라가지 않고 어깨 회전과 손목 코킹이 함께 만들어지는지 봅니다.",
         )
     if label == "low_top":
         return CoachFinding(
@@ -159,6 +188,9 @@ def _backswing_finding(backswing: Dict[str, object]) -> Optional[CoachFinding]:
             evidence="탑 위치가 낮게 잡힙니다.",
             interpretation="팔 높이만 낮은 문제가 아니라 어깨 회전과 손목 코킹이 같이 부족할 수 있습니다.",
             action="팔을 억지로 높이기보다 어깨 회전 폭과 손목 코킹이 함께 만들어지는지 확인하세요.",
+            priority="탑 위치",
+            drill="오른팔 접힘과 손목 코킹을 만든 3/4 백스윙 정지 드릴.",
+            checkpoint="탑에서 손 위치가 오른쪽 어깨보다 지나치게 낮지 않은지 확인합니다.",
         )
     if label == "high_top":
         return CoachFinding(
@@ -169,6 +201,9 @@ def _backswing_finding(backswing: Dict[str, object]) -> Optional[CoachFinding]:
             evidence="탑 위치가 높게 잡힙니다.",
             interpretation="오버스윙이면 다운스윙 타이밍이 늦어질 수 있습니다.",
             action="왼팔이 지면과 평행을 지난 직후 멈추는 축소 스윙으로 기준점을 잡으세요.",
+            priority="탑 위치",
+            drill="L-to-L 하프스윙으로 탑 위치를 줄인 뒤 같은 피니시까지 회전.",
+            checkpoint="탑에서 클럽이 목표 방향으로 과하게 넘어가지 않는지 봅니다.",
         )
     if label == "adequate":
         source_text = "손목 추적" if source == "pose_wrist" else "클럽 추적"
@@ -184,6 +219,8 @@ def _backswing_finding(backswing: Dict[str, object]) -> Optional[CoachFinding]:
             evidence=f"백스윙 크기는 {source_text} 기준으로 충분합니다.",
             interpretation="현재 관측에서는 백스윙 크기를 주요 문제로 보지 않습니다.",
             action=action,
+            priority="유지",
+            checkpoint="크기를 더 키우기보다 같은 탑 위치가 반복되는지 확인합니다.",
         )
     return None
 
@@ -204,6 +241,9 @@ def _shaft_finding(shaft_plane: Dict[str, object]) -> CoachFinding:
             evidence=f"다운스윙 샤프트가 낮고 뒤에 남는 편입니다({angle_text}).",
             interpretation="클럽이 몸 뒤에 갇히면 임팩트 직전 손으로 급히 맞추게 됩니다.",
             action="전환 때 손을 내리기보다 가슴 회전으로 클럽을 앞으로 끌고 오세요.",
+            priority="클럽 위치",
+            drill="펌프 드릴: 탑에서 허리 높이까지 2번 내렸다가 세 번째에 치기.",
+            checkpoint="다운스윙 중간에 그립과 클럽헤드가 몸 뒤가 아니라 오른쪽 허벅지 앞 공간에 있는지 봅니다.",
             caution=_caution(confidence, source),
         )
     if label == "steep":
@@ -215,6 +255,9 @@ def _shaft_finding(shaft_plane: Dict[str, object]) -> CoachFinding:
             evidence=f"다운스윙 샤프트가 세워지는 편입니다({angle_text}).",
             interpretation="손과 팔이 먼저 앞으로 나가면 깎아 치는 궤도가 되기 쉽습니다.",
             action="오른팔이 몸 앞에 붙은 상태로 내려오는지 확인하세요.",
+            priority="클럽 위치",
+            drill="오른팔 겨드랑이에 수건을 끼고 하프스윙으로 임팩트까지 회전.",
+            checkpoint="다운스윙 초반 손이 공 쪽으로 튀어나오지 않는지 봅니다.",
             caution=_caution(confidence, source),
         )
     if label == "neutral":
@@ -226,6 +269,8 @@ def _shaft_finding(shaft_plane: Dict[str, object]) -> CoachFinding:
             evidence=f"다운스윙 샤프트 각도는 2D 기준 중립 범위입니다({angle_text}).",
             interpretation="현재 관측에서는 샤프트 플레인을 주요 문제로 보지 않습니다.",
             action="임팩트 위치와 페이스/경로 안정성을 우선 확인하세요.",
+            priority="유지",
+            checkpoint="샤프트보다 임팩트 전후 클럽헤드 위치 변동을 우선 봅니다.",
             caution=_caution(confidence, source),
         )
     return CoachFinding(
@@ -236,6 +281,8 @@ def _shaft_finding(shaft_plane: Dict[str, object]) -> CoachFinding:
         evidence="샤프트 플레인은 club_head와 handle 동시 추적이 부족해 판단하지 않습니다.",
         interpretation="bbox나 단일 점만으로는 샤프트 방향을 확정하기 어렵습니다.",
         action="이 항목은 촬영/검출 품질 개선 후 다시 보세요.",
+        priority="품질",
+        checkpoint="club_head와 club_handle이 동시에 잡히는 프레임 수를 먼저 늘립니다.",
     )
 
 
@@ -254,6 +301,9 @@ def _swing_plane_finding(swing_plane: Dict[str, object]) -> Optional[CoachFindin
             evidence="클럽 경로가 outside-in 쪽으로 보입니다.",
             interpretation="슬라이스/풀성 구질이 동반된다면 손과 클럽이 바깥에서 들어오는 패턴일 수 있습니다.",
             action="다운스윙 초반 손이 공 쪽으로 튀어나오는지 확인하세요.",
+            priority="스윙 경로",
+            drill="볼 뒤 안쪽에 헤드커버를 두고 하프스윙으로 안쪽 공간에서 내려오기.",
+            checkpoint="공 기준 바깥쪽에서 클럽이 내려오는 궤적이 줄어드는지 봅니다.",
             caution=_caution(confidence, source),
         )
     if label == "inside-out":
@@ -265,6 +315,9 @@ def _swing_plane_finding(swing_plane: Dict[str, object]) -> Optional[CoachFindin
             evidence="클럽 경로가 inside-out 쪽으로 보입니다.",
             interpretation="푸시/훅성 구질이 동반된다면 클럽이 너무 뒤에서 늦게 나오는 패턴일 수 있습니다.",
             action="전환 이후 클럽이 몸 앞 공간으로 돌아오는지 확인하세요.",
+            priority="스윙 경로",
+            drill="허리 높이 펌프 동작에서 클럽헤드를 몸 앞에 둔 뒤 회전으로 임팩트.",
+            checkpoint="클럽이 과하게 뒤에서 접근해 손이 늦게 따라오는지 봅니다.",
             caution=_caution(confidence, source),
         )
     return None
@@ -282,6 +335,8 @@ def _impact_finding(impact_stability: Dict[str, object]) -> Optional[CoachFindin
             evidence=f"임팩트 주변 클럽 위치는 비교적 안정적입니다(score {score:.2f}).",
             interpretation="현재 관측에서는 임팩트 재현성을 주요 문제로 보지 않습니다.",
             action="이 패턴을 유지하면서 시작 방향과 거리 편차를 확인하세요.",
+            priority="유지",
+            checkpoint="연속 샷에서 임팩트 프레임의 손/클럽 위치가 크게 바뀌지 않는지 봅니다.",
         )
     if label == "unstable":
         return CoachFinding(
@@ -292,6 +347,9 @@ def _impact_finding(impact_stability: Dict[str, object]) -> Optional[CoachFindin
             evidence=f"임팩트 주변 클럽 위치 변동이 큽니다(score {score:.2f}).",
             interpretation="릴리스 타이밍이나 몸 회전이 임팩트 구간에서 끊길 가능성이 있습니다.",
             action="공을 맞히는 순간보다 임팩트 전후 3프레임의 손목 릴리스와 몸 회전을 먼저 보세요.",
+            priority="임팩트 재현성",
+            drill="티 위에 공을 두고 50% 속도 펀치샷으로 임팩트 후 손이 목표 쪽으로 낮게 지나가게 반복.",
+            checkpoint="임팩트 전후 클럽헤드가 갑자기 튀거나 손목이 급히 뒤집히는지 확인합니다.",
         )
     return None
 
@@ -308,6 +366,8 @@ def _quality_findings(tracking: Dict[str, object], ball: Dict[str, object], read
                 evidence="어드레스 준비 상태가 불안정하게 감지됩니다.",
                 interpretation="스윙 시작 전 움직임이 섞이면 이벤트 기준점이 흔들릴 수 있습니다.",
                 action="분석 시작 구간을 어드레스 이후로 맞추면 이벤트 정확도가 올라갑니다.",
+                priority="촬영 품질",
+                checkpoint="address로 표시된 프레임이 실제 셋업 이후인지 확인합니다.",
             )
         )
     if tracking.get("label") == "weak":
@@ -320,6 +380,8 @@ def _quality_findings(tracking: Dict[str, object], ball: Dict[str, object], read
                 evidence="추적 품질이 낮습니다.",
                 interpretation="코멘트는 우선순위 참고용이며 세부 진단은 흔들릴 수 있습니다.",
                 action="전신이 프레임 안에 들어오고 클럽 헤드가 배경과 분리되게 촬영하면 정확도가 올라갑니다.",
+                priority="촬영 품질",
+                checkpoint="클럽 헤드가 천장/그물/매트와 겹치지 않고 프레임 안에 남는지 확인합니다.",
             )
         )
     if _safe_int(tracking.get("personFrames"), 0) == 0:
@@ -332,6 +394,8 @@ def _quality_findings(tracking: Dict[str, object], ball: Dict[str, object], read
                 evidence="person detection은 없지만 pose keypoint를 사용 중입니다.",
                 interpretation="전신 bbox 기반 보정 없이 keypoint 중심으로 몸 움직임을 봅니다.",
                 action="골반/어깨 회전 코칭은 pose 안정화 후 더 강하게 판단할 수 있습니다.",
+                priority="품질",
+                checkpoint="현재는 골반/어깨 회전 진단보다 클럽-손목 기반 코멘트를 우선합니다.",
             )
         )
     if _safe_int(tracking.get("ballFrames"), 0) == 0 and str(ball.get("launchDirection") or "unknown") == "unknown":
@@ -344,6 +408,8 @@ def _quality_findings(tracking: Dict[str, object], ball: Dict[str, object], read
                 evidence="공 검출이 없어 실제 구질과 출발 방향은 판단하지 않습니다.",
                 interpretation="현재 시스템은 ball flight law까지 확정하지 못합니다.",
                 action="현재 코멘트는 몸-클럽 움직임 기준으로 해석하세요.",
+                priority="범위 제한",
+                checkpoint="슬라이스/훅 확정 코멘트는 공 출발 방향과 커브 정보가 있을 때만 강화합니다.",
             )
         )
     return findings
@@ -375,6 +441,9 @@ def _composite_findings(findings: List[CoachFinding]) -> List[CoachFinding]:
                 evidence="빠른 전환, 낮은 샤프트, 임팩트 불안정이 함께 나타납니다.",
                 interpretation="클럽이 몸 뒤에 남은 상태에서 임팩트 직전 손으로 맞추는 보상 패턴일 수 있습니다.",
                 action="첫 처방은 스피드를 줄이고, 탑에서 가슴 회전으로 클럽을 몸 앞 공간에 가져온 뒤 릴리스하는 50% 스윙입니다.",
+                priority="1순위 패턴",
+                drill="50% 속도 펌프 드릴: 탑-허리높이-탑-허리높이-임팩트 순서로 클럽을 몸 앞에 두고 치기.",
+                checkpoint="임팩트 직전 클럽헤드가 손 뒤에서 급히 따라오지 않고, 손과 클럽이 몸 앞에서 같이 지나가는지 봅니다.",
                 caution=_caution(min(shaft.confidence if shaft else 0.0, confidence), "club_box_proxy" if shaft and shaft.caution else ""),
             )
         )
@@ -397,6 +466,9 @@ def _composite_findings(findings: List[CoachFinding]) -> List[CoachFinding]:
                 evidence="세워진 샤프트와 outside-in 경로, 임팩트 불안정이 같이 보입니다.",
                 interpretation="다운스윙 초반 손과 상체가 먼저 덮이면서 클럽이 바깥에서 들어오는 패턴일 수 있습니다.",
                 action="오른팔을 몸 앞에 붙인 채 하프스윙으로 내려오고, 손보다 몸통 회전이 먼저 시작되는지 확인하세요.",
+                priority="1순위 패턴",
+                drill="오른팔 수건 하프스윙: 오른팔이 몸에서 떨어지지 않게 하고 가슴 회전으로 임팩트까지 연결.",
+                checkpoint="다운스윙 첫 1/3에서 손이 공 쪽으로 나가거나 샤프트가 급히 세워지는지 봅니다.",
                 caution=_caution(min(shaft.confidence if shaft else 0.0, path.confidence if path else 0.0), ""),
             )
         )
@@ -414,6 +486,9 @@ def _composite_findings(findings: List[CoachFinding]) -> List[CoachFinding]:
                 evidence="백스윙이 작고 전환 템포도 빠릅니다.",
                 interpretation="충분한 회전이 만들어지기 전에 다운스윙이 시작되어 손 위주로 맞추는 패턴일 수 있습니다.",
                 action="공을 치기 전 3/4 백스윙 위치를 먼저 만들고, 그 위치에서 같은 리듬으로 내려오는 반복 드릴을 우선하세요.",
+                priority="2순위 패턴",
+                drill="3/4 탑 정지 드릴: 탑 위치를 먼저 만들고 1초 정지 후 70% 속도로 피니시까지 회전.",
+                checkpoint="백스윙을 크게 만들려고 팔만 드는 보상이 아니라 어깨 회전 폭이 늘어나는지 봅니다.",
             )
         )
 

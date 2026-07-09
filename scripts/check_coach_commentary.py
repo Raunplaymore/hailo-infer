@@ -57,6 +57,9 @@ def run_fast_low_confidence_case() -> None:
     assert_not_contains(comments, "다운스윙 샤프트가 낮고 뒤에 남는 편")
     assert_not_contains(comments, "outside-in")
     assert debug[0]["key"] == "pattern_late_club_release"
+    assert debug[0]["priority"] == "1순위 패턴"
+    assert "펌프 드릴" in str(debug[0]["drill"])
+    assert "몸 앞" in str(debug[0]["checkpoint"])
     assert debug[1]["key"] == "impact_unstable"
     assert "tempo_fast" in keys(debug)
     assert "shaft_flat" in keys(debug)
@@ -112,6 +115,9 @@ def run_short_steep_case() -> None:
     assert_not_contains(comments, "다운스윙 샤프트가 세워지는 편")
     assert_not_contains(comments, "클럽 경로가 outside-in")
     assert debug[0]["key"] == "pattern_over_the_top"
+    assert debug[0]["priority"] == "1순위 패턴"
+    assert "오른팔 수건" in str(debug[0]["drill"])
+    assert "다운스윙 첫 1/3" in str(debug[0]["checkpoint"])
     assert "pattern_rushed_short_swing" in keys(debug)
     assert "shaft_steep" in keys(debug)
     assert "path_outside_in" in keys(debug)
