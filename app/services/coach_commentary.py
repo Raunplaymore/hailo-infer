@@ -42,12 +42,13 @@ class CoachFinding:
 
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "info": 3}
 CATEGORY_ORDER = {
-    "tempo": 0,
-    "backswing": 1,
-    "shaft_plane": 2,
-    "swing_path": 3,
-    "impact": 4,
-    "quality": 5,
+    "pattern": 0,
+    "tempo": 1,
+    "backswing": 2,
+    "shaft_plane": 3,
+    "swing_path": 4,
+    "impact": 5,
+    "quality": 6,
 }
 
 
@@ -348,6 +349,77 @@ def _quality_findings(tracking: Dict[str, object], ball: Dict[str, object], read
     return findings
 
 
+def _finding_by_key(findings: List[CoachFinding], key: str) -> Optional[CoachFinding]:
+    return next((finding for finding in findings if finding.key == key), None)
+
+
+def _composite_findings(findings: List[CoachFinding]) -> List[CoachFinding]:
+    composites: List[CoachFinding] = []
+    keys = {finding.key for finding in findings}
+
+    if (
+        "impact_unstable" in keys
+        and "shaft_flat" in keys
+        and ("tempo_fast" in keys or "tempo_rushed_transition" in keys)
+    ):
+        impact = _finding_by_key(findings, "impact_unstable")
+        shaft = _finding_by_key(findings, "shaft_flat")
+        tempo = _finding_by_key(findings, "tempo_fast") or _finding_by_key(findings, "tempo_rushed_transition")
+        confidence = min(0.8, max(0.35, ((impact.confidence if impact else 0.4) + (shaft.confidence if shaft else 0.3) + (tempo.confidence if tempo else 0.5)) / 3.0))
+        composites.append(
+            CoachFinding(
+                key="pattern_late_club_release",
+                category="pattern",
+                severity="high",
+                confidence=confidence,
+                evidence="빠른 전환, 낮은 샤프트, 임팩트 불안정이 함께 나타납니다.",
+                interpretation="클럽이 몸 뒤에 남은 상태에서 임팩트 직전 손으로 맞추는 보상 패턴일 수 있습니다.",
+                action="첫 처방은 스피드를 줄이고, 탑에서 가슴 회전으로 클럽을 몸 앞 공간에 가져온 뒤 릴리스하는 50% 스윙입니다.",
+                caution=_caution(min(shaft.confidence if shaft else 0.0, confidence), "club_box_proxy" if shaft and shaft.caution else ""),
+            )
+        )
+
+    if (
+        "impact_unstable" in keys
+        and "shaft_steep" in keys
+        and ("path_outside_in" in keys or "tempo_rushed_transition" in keys)
+    ):
+        impact = _finding_by_key(findings, "impact_unstable")
+        shaft = _finding_by_key(findings, "shaft_steep")
+        path = _finding_by_key(findings, "path_outside_in")
+        confidence = min(0.82, max(0.4, ((impact.confidence if impact else 0.4) + (shaft.confidence if shaft else 0.5) + (path.confidence if path else 0.5)) / 3.0))
+        composites.append(
+            CoachFinding(
+                key="pattern_over_the_top",
+                category="pattern",
+                severity="high",
+                confidence=confidence,
+                evidence="세워진 샤프트와 outside-in 경로, 임팩트 불안정이 같이 보입니다.",
+                interpretation="다운스윙 초반 손과 상체가 먼저 덮이면서 클럽이 바깥에서 들어오는 패턴일 수 있습니다.",
+                action="오른팔을 몸 앞에 붙인 채 하프스윙으로 내려오고, 손보다 몸통 회전이 먼저 시작되는지 확인하세요.",
+                caution=_caution(min(shaft.confidence if shaft else 0.0, path.confidence if path else 0.0), ""),
+            )
+        )
+
+    if "backswing_short" in keys and ("tempo_fast" in keys or "tempo_rushed_transition" in keys):
+        backswing = _finding_by_key(findings, "backswing_short")
+        tempo = _finding_by_key(findings, "tempo_fast") or _finding_by_key(findings, "tempo_rushed_transition")
+        confidence = min(0.78, max(0.35, ((backswing.confidence if backswing else 0.3) + (tempo.confidence if tempo else 0.5)) / 2.0))
+        composites.append(
+            CoachFinding(
+                key="pattern_rushed_short_swing",
+                category="pattern",
+                severity="medium",
+                confidence=confidence,
+                evidence="백스윙이 작고 전환 템포도 빠릅니다.",
+                interpretation="충분한 회전이 만들어지기 전에 다운스윙이 시작되어 손 위주로 맞추는 패턴일 수 있습니다.",
+                action="공을 치기 전 3/4 백스윙 위치를 먼저 만들고, 그 위치에서 같은 리듬으로 내려오는 반복 드릴을 우선하세요.",
+            )
+        )
+
+    return composites
+
+
 def _rank_findings(findings: List[CoachFinding]) -> List[CoachFinding]:
     return sorted(
         findings,
@@ -357,6 +429,18 @@ def _rank_findings(findings: List[CoachFinding]) -> List[CoachFinding]:
             -finding.confidence,
         ),
     )
+
+
+def _suppress_redundant_summary_findings(findings: List[CoachFinding]) -> List[CoachFinding]:
+    keys = {finding.key for finding in findings}
+    suppressed = set()
+    if "pattern_late_club_release" in keys:
+        suppressed.update({"tempo_fast", "tempo_rushed_transition", "shaft_flat"})
+    if "pattern_over_the_top" in keys:
+        suppressed.update({"shaft_steep", "path_outside_in"})
+    if "pattern_rushed_short_swing" in keys:
+        suppressed.add("backswing_short")
+    return [finding for finding in findings if finding.key not in suppressed]
 
 
 def build_coach_findings(
@@ -380,6 +464,7 @@ def build_coach_findings(
         if candidate:
             findings.append(candidate)
     findings.extend(_quality_findings(tracking, ball, readiness))
+    findings.extend(_composite_findings(findings))
     return _rank_findings(findings)
 
 
@@ -395,16 +480,21 @@ def build_coach_comments(
     *,
     limit: int = 6,
 ) -> List[str]:
-    comments = [finding.comment() for finding in build_coach_findings(
-        tempo,
-        shaft_plane,
-        backswing,
-        impact_stability,
-        readiness,
-        tracking,
-        ball,
-        swing_plane,
-    )]
+    comments = [
+        finding.comment()
+        for finding in _suppress_redundant_summary_findings(
+            build_coach_findings(
+                tempo,
+                shaft_plane,
+                backswing,
+                impact_stability,
+                readiness,
+                tracking,
+                ball,
+                swing_plane,
+            )
+        )
+    ]
 
     deduped: List[str] = []
     seen = set()

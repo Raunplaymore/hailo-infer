@@ -44,13 +44,16 @@ def run_fast_low_confidence_case() -> None:
     )
 
     assert len(comments) == 6
+    assert_contains(comments, "빠른 전환, 낮은 샤프트, 임팩트 불안정")
+    assert_contains(comments, "클럽이 몸 뒤에 남은 상태")
     assert_contains(comments, "임팩트 주변 클럽 위치 변동")
-    assert_contains(comments, "템포가 2.01:1로 빠른 편")
-    assert_contains(comments, "다운스윙 샤프트가 낮고 뒤에 남는 편")
     assert_contains(comments, "club_handle 없이 bbox로 근사")
     assert_contains(comments, "추적 품질이 낮습니다")
+    assert_not_contains(comments, "템포가 2.01:1로 빠른 편")
+    assert_not_contains(comments, "다운스윙 샤프트가 낮고 뒤에 남는 편")
     assert_not_contains(comments, "outside-in")
-    assert debug[0]["key"] == "impact_unstable"
+    assert debug[0]["key"] == "pattern_late_club_release"
+    assert debug[1]["key"] == "impact_unstable"
     assert any(item["key"] == "shaft_flat" for item in debug)
 
 
@@ -87,9 +90,11 @@ def run_short_steep_case() -> None:
     )
 
     assert_contains(comments, "전환이 급합니다")
-    assert_contains(comments, "백스윙 크기가 작게 잡힙니다")
-    assert_contains(comments, "다운스윙 샤프트가 세워지는 편")
-    assert_contains(comments, "클럽 경로가 outside-in")
+    assert_contains(comments, "세워진 샤프트와 outside-in 경로")
+    assert_contains(comments, "백스윙이 작고 전환 템포도 빠릅니다")
+    assert_not_contains(comments, "백스윙 크기가 작게 잡힙니다")
+    assert_not_contains(comments, "다운스윙 샤프트가 세워지는 편")
+    assert_not_contains(comments, "클럽 경로가 outside-in")
 
 
 if __name__ == "__main__":
