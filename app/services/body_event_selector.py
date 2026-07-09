@@ -446,6 +446,53 @@ def feature_sequence_ranked(body_payload: Optional[Dict[str, Any]]) -> list[tupl
     return ranked
 
 
+def early_top_cluster_candidate(clusters: list[Dict[str, Any]]) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    if not clusters:
+        return None, {}
+    first_cluster = clusters[0]
+    first_t = _safe_float(first_cluster.get("t"), 9999.0)
+    first_weight = _safe_float(first_cluster.get("weight"), 0.0)
+    if first_t > 120.0 or first_weight < 9.0:
+        return None, {}
+
+    impact_candidates = [cluster for cluster in clusters if first_t + 300.0 <= _safe_float(cluster.get("t"), 0.0) <= first_t + 540.0]
+    impact_cluster = max(impact_candidates, key=lambda cluster: _safe_float(cluster.get("weight"), 0.0), default=None)
+    impact_t = _safe_float(impact_cluster.get("t"), 0.0) if impact_cluster else None
+    if impact_t is None:
+        return None, {}
+
+    top_cluster = first_cluster
+    refined_top = False
+    refined_top_candidates = [
+        cluster
+        for cluster in clusters
+        if first_t + 120.0 <= _safe_float(cluster.get("t"), 0.0) <= impact_t - 90.0
+        and _safe_float(cluster.get("weight"), 0.0) >= first_weight * 1.1
+    ]
+    if refined_top_candidates:
+        top_cluster = max(refined_top_candidates, key=lambda cluster: _safe_float(cluster.get("weight"), 0.0))
+        refined_top = True
+
+    finish_candidates = [cluster for cluster in clusters if impact_t + 160.0 <= _safe_float(cluster.get("t"), 0.0) <= impact_t + 360.0]
+    finish_cluster = max(finish_candidates, key=lambda cluster: _safe_float(cluster.get("weight"), 0.0), default=None)
+    if not finish_cluster:
+        return None, {}
+
+    return {
+        "addressMs": 0,
+        "topMs": round(_safe_float(top_cluster.get("t"), first_t)),
+        "impactMs": round(impact_t),
+        "finishMs": round(_safe_float(finish_cluster.get("t"), 0.0)),
+    }, {
+        "topWeight": round(_safe_float(top_cluster.get("weight"), first_weight), 2),
+        "impactWeight": round(_safe_float(impact_cluster.get("weight"), 0.0), 2),
+        "finishWeight": round(_safe_float(finish_cluster.get("weight"), 0.0), 2),
+        "originalTopMs": round(first_t),
+        "originalTopWeight": round(first_weight, 2),
+        "topRefined": refined_top,
+    }
+
+
 def select_body_events(body_payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     sequence_ranked = feature_sequence_ranked(body_payload)
     vote = feature_vote_events(body_payload)
@@ -457,30 +504,11 @@ def select_body_events(body_payload: Optional[Dict[str, Any]]) -> Dict[str, Any]
         events = vote.get("events", {})
         clusters = vote.get("clusters") if isinstance(vote.get("clusters"), list) else []
         if clusters:
-            first_cluster = clusters[0]
-            first_t = _safe_float(first_cluster.get("t"), 9999.0)
-            first_weight = _safe_float(first_cluster.get("weight"), 0.0)
-            if first_t <= 120.0 and first_weight >= 9.0:
-                impact_candidates = [cluster for cluster in clusters if first_t + 300.0 <= _safe_float(cluster.get("t"), 0.0) <= first_t + 540.0]
-                impact_cluster = max(impact_candidates, key=lambda cluster: _safe_float(cluster.get("weight"), 0.0), default=None)
-                impact_t = _safe_float(impact_cluster.get("t"), 0.0) if impact_cluster else None
-                finish_cluster = None
-                if impact_t is not None:
-                    finish_candidates = [cluster for cluster in clusters if impact_t + 160.0 <= _safe_float(cluster.get("t"), 0.0) <= impact_t + 360.0]
-                    finish_cluster = max(finish_candidates, key=lambda cluster: _safe_float(cluster.get("weight"), 0.0), default=None)
-                if impact_cluster and finish_cluster:
-                    candidate_name = "feature-vote-early-top-cluster"
-                    candidate_events = {
-                        "addressMs": 0,
-                        "topMs": round(first_t),
-                        "impactMs": round(impact_t),
-                        "finishMs": round(_safe_float(finish_cluster.get("t"), 0.0)),
-                    }
-                    candidate_debug = {
-                        "topWeight": round(first_weight, 2),
-                        "impactWeight": round(_safe_float(impact_cluster.get("weight"), 0.0), 2),
-                        "finishWeight": round(_safe_float(finish_cluster.get("weight"), 0.0), 2),
-                    }
+            early_candidate_events, early_candidate_debug = early_top_cluster_candidate(clusters)
+            if early_candidate_events:
+                candidate_name = "feature-vote-early-top-cluster"
+                candidate_events = early_candidate_events
+                candidate_debug = early_candidate_debug
         address_t = _safe_float(events.get("addressMs"), 9999.0)
         top_t = _safe_float(events.get("topMs"), 9999.0)
         impact_t = _safe_float(events.get("impactMs"), 9999.0)
