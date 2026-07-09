@@ -21,6 +21,10 @@ def assert_not_contains(comments: list[str], text: str) -> None:
         raise AssertionError(f"unexpected text {text!r} in comments: {comments}")
 
 
+def keys(debug: list[dict[str, object]]) -> list[object]:
+    return [item["key"] for item in debug]
+
+
 def run_fast_low_confidence_case() -> None:
     comments = build_coach_comments(
         {"backswingMs": 352, "downswingMs": 175, "ratio": 2.01},
@@ -54,7 +58,9 @@ def run_fast_low_confidence_case() -> None:
     assert_not_contains(comments, "outside-in")
     assert debug[0]["key"] == "pattern_late_club_release"
     assert debug[1]["key"] == "impact_unstable"
-    assert any(item["key"] == "shaft_flat" for item in debug)
+    assert "tempo_fast" in keys(debug)
+    assert "shaft_flat" in keys(debug)
+    assert "ball_missing" in keys(debug)
 
 
 def run_stable_neutral_case() -> None:
@@ -88,6 +94,16 @@ def run_short_steep_case() -> None:
         {"launchDirection": "right"},
         {"label": "outside-in", "confidence": 0.5, "source": "hybrid"},
     )
+    debug = build_coach_finding_debug(
+        {"backswingMs": 120, "downswingMs": 120, "ratio": 1.0},
+        {"label": "steep", "confidence": 0.62, "angleDeg": 66.0, "source": "head_handle"},
+        {"label": "short", "score": 0.2, "clubTravelRatio": 0.04, "source": "club_motion"},
+        {"label": "unstable", "score": 0.35},
+        {"label": "ready"},
+        {"label": "fair", "score": 0.4, "personFrames": 12, "ballFrames": 2},
+        {"launchDirection": "right"},
+        {"label": "outside-in", "confidence": 0.5, "source": "hybrid"},
+    )
 
     assert_contains(comments, "전환이 급합니다")
     assert_contains(comments, "세워진 샤프트와 outside-in 경로")
@@ -95,6 +111,10 @@ def run_short_steep_case() -> None:
     assert_not_contains(comments, "백스윙 크기가 작게 잡힙니다")
     assert_not_contains(comments, "다운스윙 샤프트가 세워지는 편")
     assert_not_contains(comments, "클럽 경로가 outside-in")
+    assert debug[0]["key"] == "pattern_over_the_top"
+    assert "pattern_rushed_short_swing" in keys(debug)
+    assert "shaft_steep" in keys(debug)
+    assert "path_outside_in" in keys(debug)
 
 
 if __name__ == "__main__":
