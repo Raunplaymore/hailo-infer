@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.services.body_event_selector import select_body_events
-from app.services.coach_commentary import build_coach_comments
+from app.services.coach_commentary import build_coach_comments, build_coach_finding_debug
 
-COACH_ANALYSIS_VERSION = "hailo-coach-service7-v4"
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v5"
 
 SERVICE7_LABELS = {
     0: "person",
@@ -1458,6 +1458,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         "source": motion_source,
     }
     coach_summary = _coach_comments(tempo, shaft, backswing, impact_stability, readiness, tracking, ball, swing_plane)
+    coach_findings = build_coach_finding_debug(tempo, shaft, backswing, impact_stability, readiness, tracking, ball, swing_plane)
     summary = f"service7 분석 완료: tempo {ratio}:1, shaft {shaft['label']}, backswing {backswing['label']}."
     duration_ms = _safe_int(meta.get("durationMs"), 0) or (_safe_int(frames[-1].get("_t_ms"), 0) if frames else 0)
 
@@ -1524,5 +1525,6 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "speedMax": float(max(speeds)) if speeds else 0.0,
             "shaftSamples": float(shaft.get("sampleCount") or 0),
             "trackingScore": float(tracking["score"]),
+            "coachFindings": coach_findings,
         },
     }
