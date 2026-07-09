@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from app.services.body_event_selector import select_body_events
 from app.services.coach_commentary import build_coach_comments, build_coach_finding_debug
 
-COACH_ANALYSIS_VERSION = "hailo-coach-service7-v7"
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v8"
 
 SERVICE7_LABELS = {
     0: "person",
@@ -1492,6 +1492,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         },
         "summary": summary,
         "coachSummary": coach_summary,
+        "coachFindings": coach_findings,
         "confidence": confidence,
         "analysisVersion": COACH_ANALYSIS_VERSION,
         "meta": {
