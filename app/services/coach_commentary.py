@@ -57,10 +57,11 @@ CATEGORY_ORDER = {
     "pattern": 0,
     "tempo": 1,
     "backswing": 2,
-    "shaft_plane": 3,
-    "swing_path": 4,
-    "impact": 5,
-    "quality": 6,
+    "body": 3,
+    "shaft_plane": 4,
+    "swing_path": 5,
+    "impact": 6,
+    "quality": 7,
 }
 
 
@@ -415,6 +416,68 @@ def _quality_findings(tracking: Dict[str, object], ball: Dict[str, object], read
     return findings
 
 
+def _body_findings(body_metrics: Dict[str, object]) -> List[CoachFinding]:
+    findings: List[CoachFinding] = []
+    head = body_metrics.get("headStability")
+    if isinstance(head, dict):
+        label = str(head.get("label") or "")
+        movement = _safe_float(head.get("movementRatio"), 0.0)
+        confidence = _safe_float(head.get("confidence"), 0.0)
+        if label == "unstable" and confidence >= 0.35:
+            findings.append(
+                CoachFinding(
+                    key="head_unstable",
+                    category="body",
+                    severity="medium",
+                    confidence=confidence,
+                    evidence=f"머리 기준점 이동이 크게 잡힙니다(movement {movement:.2f}).",
+                    interpretation="스윙 중 머리와 상체 축이 많이 흔들리면 최저점과 임팩트 위치가 함께 흔들릴 수 있습니다.",
+                    action="백스윙에서 머리를 고정하려고 버티기보다, 가슴 회전은 허용하되 상체 중심이 공 쪽/뒤쪽으로 밀리지 않는지 보세요.",
+                    priority="축 안정성",
+                    drill="벽 앞 섀도우 스윙: 이마와 벽 사이 간격을 유지하면서 50% 속도로 백스윙-임팩트 반복.",
+                    checkpoint="address부터 impact까지 코/머리 위치가 어깨폭의 절반 이상 이동하지 않는지 확인합니다.",
+                    caution="2D 코 keypoint 기반 참고 신호입니다.",
+                )
+            )
+        elif label == "stable" and confidence >= 0.35:
+            findings.append(
+                CoachFinding(
+                    key="head_stable",
+                    category="body",
+                    severity="info",
+                    confidence=confidence,
+                    evidence=f"머리 기준점은 비교적 안정적입니다(movement {movement:.2f}).",
+                    interpretation="현재 관측에서는 상체 축 흔들림을 주요 문제로 보지 않습니다.",
+                    action="축을 더 고정하려 하기보다 회전 순서와 임팩트 재현성을 우선하세요.",
+                    priority="유지",
+                    checkpoint="머리 고정보다 가슴과 골반 회전이 막히지 않는지 같이 봅니다.",
+                )
+            )
+
+    shoulder = body_metrics.get("shoulderTurnProxy")
+    if isinstance(shoulder, dict):
+        label = str(shoulder.get("label") or "")
+        delta = shoulder.get("deltaDeg")
+        confidence = _safe_float(shoulder.get("confidence"), 0.0)
+        if label == "limited" and confidence >= 0.3:
+            findings.append(
+                CoachFinding(
+                    key="shoulder_turn_limited",
+                    category="body",
+                    severity="medium",
+                    confidence=confidence,
+                    evidence=f"어깨 회전 proxy 변화가 작게 잡힙니다({delta}도).",
+                    interpretation="실제 회전이 부족하면 백스윙 크기와 다운스윙 여유가 같이 줄어들 수 있습니다.",
+                    action="팔을 더 드는 보상보다 왼쪽 어깨가 턱 밑으로 들어오는 몸통 회전을 먼저 확인하세요.",
+                    priority="몸통 회전",
+                    drill="클럽을 가슴에 대고 어깨선이 목표 반대쪽으로 돌아가는 3/4 회전 드릴.",
+                    checkpoint="탑에서 손 높이보다 어깨선 변화가 먼저 늘어나는지 봅니다.",
+                    caution="2D shoulder keypoint proxy라 실제 회전각 확정값은 아닙니다.",
+                )
+            )
+    return findings
+
+
 def _finding_by_key(findings: List[CoachFinding], key: str) -> Optional[CoachFinding]:
     return next((finding for finding in findings if finding.key == key), None)
 
@@ -527,6 +590,7 @@ def build_coach_findings(
     tracking: Dict[str, object],
     ball: Dict[str, object],
     swing_plane: Dict[str, object],
+    body_metrics: Optional[Dict[str, object]] = None,
 ) -> List[CoachFinding]:
     findings: List[CoachFinding] = []
     for candidate in (
@@ -538,6 +602,7 @@ def build_coach_findings(
     ):
         if candidate:
             findings.append(candidate)
+    findings.extend(_body_findings(body_metrics or {}))
     findings.extend(_quality_findings(tracking, ball, readiness))
     findings.extend(_composite_findings(findings))
     return _rank_findings(findings)
@@ -552,6 +617,7 @@ def build_coach_comments(
     tracking: Dict[str, object],
     ball: Dict[str, object],
     swing_plane: Dict[str, object],
+    body_metrics: Optional[Dict[str, object]] = None,
     *,
     limit: int = 6,
 ) -> List[str]:
@@ -567,6 +633,7 @@ def build_coach_comments(
                 tracking,
                 ball,
                 swing_plane,
+                body_metrics or {},
             )
         )
     ]
@@ -591,6 +658,7 @@ def build_coach_finding_debug(
     tracking: Dict[str, object],
     ball: Dict[str, object],
     swing_plane: Dict[str, object],
+    body_metrics: Optional[Dict[str, object]] = None,
     *,
     limit: int = 8,
 ) -> List[Dict[str, object]]:
@@ -605,5 +673,6 @@ def build_coach_finding_debug(
             tracking,
             ball,
             swing_plane,
+            body_metrics or {},
         )[:limit]
     ]

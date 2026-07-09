@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from app.services.body_event_selector import select_body_events
 from app.services.coach_commentary import build_coach_comments, build_coach_finding_debug
 
-COACH_ANALYSIS_VERSION = "hailo-coach-service7-v8"
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v9"
 
 SERVICE7_LABELS = {
     0: "person",
@@ -397,6 +397,129 @@ def _keypoint_xyc(frame: dict, name: str) -> Optional[Tuple[float, float, float]
         return None
     conf = _safe_float(raw[2], 0.0) if len(raw) >= 3 else 1.0
     return _safe_float(raw[0], 0.0), _safe_float(raw[1], 0.0), conf
+
+
+def _angle_deg(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> float:
+    return math.degrees(math.atan2(a[1] - b[1], a[0] - b[0]))
+
+
+def _median_point_distance(points: List[Tuple[float, float, float]]) -> float:
+    if len(points) < 2:
+        return 0.0
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    center_x = _median(xs)
+    center_y = _median(ys)
+    return max(math.hypot(point[0] - center_x, point[1] - center_y) for point in points)
+
+
+def _body_pose_metrics(
+    body: Optional[Dict[str, Any]],
+    address_ms: int,
+    top_ms: int,
+    impact_ms: int,
+) -> Dict[str, object]:
+    frames = body.get("frames") if isinstance(body, dict) else None
+    if not isinstance(frames, list) or not frames:
+        return {
+            "poseCoverage": {"label": "missing", "score": 0.0, "sampleCount": 0},
+            "headStability": {"label": "unknown", "score": 0.0, "movementRatio": None, "sampleCount": 0, "confidence": 0.0},
+            "shoulderTurnProxy": {"label": "unknown", "deltaDeg": None, "sampleCount": 0, "confidence": 0.0},
+            "hipTurnProxy": {"label": "unknown", "deltaDeg": None, "sampleCount": 0, "confidence": 0.0},
+        }
+
+    pose_frames = [frame for frame in frames if isinstance(frame, dict) and isinstance(frame.get("keypoints"), dict)]
+    pose_coverage = len(pose_frames) / float(max(1, len(frames)))
+    window_start = max(0, address_ms - 80)
+    window_end = max(window_start, impact_ms + 80)
+    window_frames = [
+        frame
+        for frame in pose_frames
+        if window_start <= _safe_float(frame.get("timeMs"), 0.0) <= window_end
+    ] or pose_frames
+
+    shoulder_widths: List[float] = []
+    nose_points: List[Tuple[float, float, float]] = []
+    shoulder_angles: List[Tuple[float, float]] = []
+    hip_angles: List[Tuple[float, float]] = []
+
+    for frame in window_frames:
+        t = _safe_float(frame.get("timeMs"), 0.0)
+        nose = _keypoint_xyc(frame, "nose")
+        left_shoulder = _keypoint_xyc(frame, "left_shoulder")
+        right_shoulder = _keypoint_xyc(frame, "right_shoulder")
+        left_hip = _keypoint_xyc(frame, "left_hip")
+        right_hip = _keypoint_xyc(frame, "right_hip")
+        if nose and nose[2] >= 0.35:
+            nose_points.append(nose)
+        if left_shoulder and right_shoulder and left_shoulder[2] >= 0.35 and right_shoulder[2] >= 0.35:
+            shoulder_widths.append(math.hypot(left_shoulder[0] - right_shoulder[0], left_shoulder[1] - right_shoulder[1]))
+            shoulder_angles.append((t, _angle_deg(left_shoulder, right_shoulder)))
+        if left_hip and right_hip and left_hip[2] >= 0.35 and right_hip[2] >= 0.35:
+            hip_angles.append((t, _angle_deg(left_hip, right_hip)))
+
+    scale = max(0.03, _median(shoulder_widths) if shoulder_widths else 0.0)
+    head_move = _median_point_distance(nose_points)
+    head_ratio = head_move / scale if scale > 0 else 0.0
+    if len(nose_points) < 5:
+        head_label = "unknown"
+        head_score = 0.0
+    elif head_ratio <= 0.22:
+        head_label = "stable"
+        head_score = 1.0 - _clamp(head_ratio / 0.35)
+    elif head_ratio <= 0.42:
+        head_label = "moderate"
+        head_score = 1.0 - _clamp(head_ratio / 0.55)
+    else:
+        head_label = "unstable"
+        head_score = _clamp(head_ratio / 0.75)
+
+    def turn_proxy(angle_samples: List[Tuple[float, float]], name: str) -> Dict[str, object]:
+        if len(angle_samples) < 5:
+            return {"label": "unknown", "deltaDeg": None, "sampleCount": len(angle_samples), "confidence": 0.0, "source": "pose_2d_proxy"}
+        address_samples = [angle for t, angle in angle_samples if t <= address_ms + 120]
+        top_samples = [angle for t, angle in angle_samples if max(address_ms, top_ms - 140) <= t <= top_ms + 140]
+        if not address_samples or not top_samples:
+            return {"label": "unknown", "deltaDeg": None, "sampleCount": len(angle_samples), "confidence": 0.0, "source": "pose_2d_proxy"}
+        delta = abs(_median(top_samples) - _median(address_samples))
+        # Normalize wrap-around artifacts from atan2.
+        delta = min(delta, abs(360.0 - delta))
+        limited_cutoff = 6.0 if name == "hip" else 8.0
+        high_cutoff = 28.0 if name == "hip" else 36.0
+        if delta < limited_cutoff:
+            label = "limited"
+        elif delta > high_cutoff:
+            label = "large"
+        else:
+            label = "available"
+        confidence = _clamp(len(angle_samples) / float(max(8, len(window_frames)))) * 0.55
+        return {
+            "label": label,
+            "deltaDeg": round(delta, 1),
+            "sampleCount": len(angle_samples),
+            "confidence": round(confidence, 2),
+            "source": "pose_2d_proxy",
+            "comment": "2D keypoint 각도 변화라 실제 회전량 확정값은 아닙니다.",
+        }
+
+    return {
+        "poseCoverage": {
+            "label": "available" if pose_coverage >= 0.4 else "weak" if pose_coverage > 0 else "missing",
+            "score": round(pose_coverage, 2),
+            "sampleCount": len(pose_frames),
+            "totalFrames": len(frames),
+        },
+        "headStability": {
+            "label": head_label,
+            "score": round(_clamp(head_score), 2),
+            "movementRatio": round(head_ratio, 2) if nose_points else None,
+            "sampleCount": len(nose_points),
+            "confidence": round(_clamp(len(nose_points) / float(max(8, len(window_frames)))), 2),
+            "source": "nose_vs_shoulder_width",
+        },
+        "shoulderTurnProxy": turn_proxy(shoulder_angles, "shoulder"),
+        "hipTurnProxy": turn_proxy(hip_angles, "hip"),
+    }
 
 
 def _wrist_track_from_body(body: Optional[Dict[str, Any]]) -> List[dict]:
@@ -1299,6 +1422,7 @@ def _coach_comments(
     tracking: Dict[str, object],
     ball: Optional[Dict[str, object]] = None,
     swing_plane: Optional[Dict[str, object]] = None,
+    body_metrics: Optional[Dict[str, object]] = None,
 ) -> List[str]:
     return build_coach_comments(
         tempo,
@@ -1309,6 +1433,7 @@ def _coach_comments(
         tracking,
         ball or {},
         swing_plane or {},
+        body_metrics or {},
     )
 
 
@@ -1436,6 +1561,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     readiness = _readiness_metric(frames)
     tracking = _tracking_quality(frames, club_head_track, handle_track, club_track, ball_track, person_track)
     ball = _ball_metric(ball_track, impact_ms, width, height)
+    body_metrics = _body_pose_metrics(body_artifact, address_ms, top_ms, impact_ms)
     wrist_sources: Dict[str, int] = {}
     for point in wrist_track:
         source_name = str(point.get("wristSource") or "unknown")
@@ -1457,8 +1583,8 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         "confidence": swing_conf,
         "source": motion_source,
     }
-    coach_summary = _coach_comments(tempo, shaft, backswing, impact_stability, readiness, tracking, ball, swing_plane)
-    coach_findings = build_coach_finding_debug(tempo, shaft, backswing, impact_stability, readiness, tracking, ball, swing_plane)
+    coach_summary = _coach_comments(tempo, shaft, backswing, impact_stability, readiness, tracking, ball, swing_plane, body_metrics)
+    coach_findings = build_coach_finding_debug(tempo, shaft, backswing, impact_stability, readiness, tracking, ball, swing_plane, body_metrics)
     summary = f"service7 분석 완료: tempo {ratio}:1, shaft {shaft['label']}, backswing {backswing['label']}."
     duration_ms = _safe_int(meta.get("durationMs"), 0) or (_safe_int(frames[-1].get("_t_ms"), 0) if frames else 0)
 
@@ -1483,6 +1609,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "readiness": readiness,
             "trackingQuality": tracking,
             "ball": ball,
+            "body": body_metrics,
             "eventTiming": {
                 "address": address_ms,
                 "top": top_ms,
