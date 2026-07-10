@@ -184,9 +184,56 @@ def run_body_pose_case() -> None:
     assert "shoulder_turn_limited" in keys(debug)
 
 
+def run_fusion_sequence_cases() -> None:
+    rushed_comments = build_coach_comments(
+        {"backswingMs": 260, "downswingMs": 180, "ratio": 1.44},
+        {"label": "neutral", "confidence": 0.52, "angleDeg": 46.0, "source": "head_handle"},
+        {"label": "adequate", "score": 0.72, "clubTravelRatio": 0.32, "source": "club_motion"},
+        {"label": "stable", "score": 0.74},
+        {"label": "ready"},
+        {"label": "fair", "score": 0.46, "personFrames": 18, "ballFrames": 1},
+        {"launchDirection": "unknown"},
+        {"label": "neutral", "confidence": 0.36, "source": "hybrid"},
+        {},
+        {
+            "sequencing": {
+                "label": "rushed_transition_proxy",
+                "confidence": 0.64,
+                "evidence": ["tempo_rushed"],
+            }
+        },
+    )
+    assert_contains(rushed_comments, "시퀀싱 proxy가 빠른 전환")
+    assert_contains(rushed_comments, "하체-몸통-팔-클럽 순서")
+    assert_contains(rushed_comments, "2D pose/tempo 기반 proxy")
+
+    cast_comments = build_coach_comments(
+        {"backswingMs": 320, "downswingMs": 130, "ratio": 2.46},
+        {"label": "steep", "confidence": 0.64, "angleDeg": 67.0, "source": "head_handle"},
+        {"label": "adequate", "score": 0.68, "clubTravelRatio": 0.28, "source": "club_motion"},
+        {"label": "unstable", "score": 0.52},
+        {"label": "ready"},
+        {"label": "fair", "score": 0.44, "personFrames": 14, "ballFrames": 0},
+        {"launchDirection": "unknown"},
+        {"label": "neutral", "confidence": 0.2, "source": "hybrid"},
+        {},
+        {
+            "releaseTiming": {
+                "label": "early_or_cast_proxy",
+                "confidence": 0.58,
+                "evidence": ["steep_shaft", "impact_unstable"],
+            }
+        },
+    )
+    assert_contains(cast_comments, "릴리스 타이밍 proxy가 손/팔 선행")
+    assert_contains(cast_comments, "샤프트가 세워지고 바깥에서 덮이는")
+    assert_contains(cast_comments, "공/페이스 데이터가 없는 tempo-shaft-impact proxy")
+
+
 if __name__ == "__main__":
     run_fast_low_confidence_case()
     run_stable_neutral_case()
     run_short_steep_case()
     run_body_pose_case()
+    run_fusion_sequence_cases()
     print("coach commentary checks passed")
