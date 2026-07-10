@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from app.services.body_event_selector import select_body_events
 from app.services.coach_commentary import build_coach_comments, build_coach_finding_debug
 
-COACH_ANALYSIS_VERSION = "hailo-coach-service7-v9"
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v10"
 
 SERVICE7_LABELS = {
     0: "person",
@@ -1413,6 +1413,114 @@ def _ball_metric(ball_track: List[dict], impact_ms: int, width: Optional[float],
     }
 
 
+def _fusion_metrics(
+    tempo: Dict[str, object],
+    shaft_plane: Dict[str, object],
+    backswing: Dict[str, object],
+    impact_stability: Dict[str, object],
+    swing_plane: Dict[str, object],
+    body_metrics: Dict[str, object],
+    tracking: Dict[str, object],
+) -> Dict[str, object]:
+    ratio = _safe_float(tempo.get("ratio"), 0.0)
+    downswing_ms = _safe_int(tempo.get("downswingMs"), 0)
+    shaft_label = str(shaft_plane.get("label") or "")
+    shaft_conf = _safe_float(shaft_plane.get("confidence"), 0.0)
+    impact_label = str(impact_stability.get("label") or "")
+    impact_score = _safe_float(impact_stability.get("score"), 0.0)
+    path_label = str(swing_plane.get("label") or "")
+    path_conf = _safe_float(swing_plane.get("confidence"), 0.0)
+    tracking_score = _safe_float(tracking.get("score"), 0.0)
+    quality_factor = _clamp(0.45 + tracking_score)
+    backswing_label = str(backswing.get("label") or "")
+
+    shoulder = body_metrics.get("shoulderTurnProxy")
+    shoulder_label = str(shoulder.get("label") or "") if isinstance(shoulder, dict) else ""
+    shoulder_conf = _safe_float(shoulder.get("confidence"), 0.0) if isinstance(shoulder, dict) else 0.0
+
+    release_label = "unknown"
+    release_comment = "공/페이스 데이터 없이 릴리스 타이밍을 확정하지 않습니다."
+    release_confidence = 0.0
+    release_evidence: List[str] = []
+    if impact_label == "unstable" and shaft_label == "flat":
+        release_label = "late_proxy"
+        release_evidence = ["flat_shaft", "impact_unstable"]
+        if ratio and ratio < 2.4:
+            release_evidence.append("fast_transition")
+        release_confidence = _clamp(((shaft_conf + (1.0 - impact_score)) / 2.0) * quality_factor)
+        release_comment = "샤프트가 낮고 임팩트가 흔들려 클럽이 몸 뒤에서 늦게 풀리는 패턴을 의심합니다."
+    elif impact_label == "unstable" and shaft_label == "steep":
+        release_label = "early_or_cast_proxy"
+        release_evidence = ["steep_shaft", "impact_unstable"]
+        release_confidence = _clamp(((shaft_conf + (1.0 - impact_score) + path_conf) / 3.0) * quality_factor)
+        release_comment = "샤프트가 세워지고 임팩트가 흔들려 손/팔이 먼저 덮이는 패턴을 의심합니다."
+    elif impact_label == "stable" and shaft_label in {"neutral", "flat", "steep"}:
+        release_label = "usable_proxy"
+        release_evidence = ["impact_stable"]
+        release_confidence = _clamp((impact_score + shaft_conf) / 2.0)
+        release_comment = "현재 관측에서는 릴리스 타이밍을 주요 문제로 보지 않습니다."
+
+    sequence_label = "unknown"
+    sequence_comment = "골반/흉곽 3D 회전이 없어 시퀀싱은 2D proxy로만 봅니다."
+    sequence_confidence = 0.0
+    sequence_evidence: List[str] = []
+    if ratio and ratio < 1.7:
+        sequence_label = "rushed_transition_proxy"
+        sequence_evidence = ["tempo_rushed"]
+        sequence_confidence = _clamp(0.45 + min(0.25, (1.7 - ratio) * 0.2))
+        sequence_comment = "탑 이후 전환 시간이 짧아 하체-몸통-팔-클럽 순서가 무너지기 쉬운 리듬입니다."
+    elif ratio and ratio < 2.4 and (backswing_label == "short" or shoulder_label == "limited"):
+        sequence_label = "arms_dominant_proxy"
+        sequence_evidence = ["tempo_fast"]
+        if backswing_label == "short":
+            sequence_evidence.append("backswing_short")
+        if shoulder_label == "limited":
+            sequence_evidence.append("shoulder_turn_limited")
+        sequence_confidence = _clamp(((0.5 + shoulder_conf) / 2.0) * quality_factor)
+        sequence_comment = "회전 또는 백스윙 여유가 충분히 만들어지기 전에 손/팔이 먼저 내려오는 패턴을 의심합니다."
+    elif shoulder_label == "limited" and backswing_label in {"short", "adequate"}:
+        sequence_label = "turn_limited_proxy"
+        sequence_evidence = ["shoulder_turn_limited"]
+        sequence_confidence = _clamp(shoulder_conf)
+        sequence_comment = "어깨 회전 proxy가 작아 몸통 회전 여유가 부족할 수 있습니다."
+    elif ratio and 2.4 <= ratio <= 3.6:
+        sequence_label = "usable_proxy"
+        sequence_evidence = ["tempo_usable"]
+        sequence_confidence = _clamp(0.45 + min(tracking_score, 0.3))
+        sequence_comment = "템포 기준으로는 전환 순서를 크게 의심하지 않습니다."
+
+    return {
+        "releaseTiming": {
+            "label": release_label,
+            "confidence": round(release_confidence, 2),
+            "source": "tempo_shaft_impact_proxy",
+            "evidence": release_evidence,
+            "comment": f"{release_comment} 공/페이스 정보가 없어 확정값은 아닙니다.",
+        },
+        "sequencing": {
+            "label": sequence_label,
+            "confidence": round(sequence_confidence, 2),
+            "source": "tempo_pose_proxy",
+            "evidence": sequence_evidence,
+            "comment": sequence_comment,
+        },
+        "transitionTiming": {
+            "label": "fast" if ratio and ratio < 2.4 else "usable" if ratio and ratio <= 3.6 else "slow" if ratio else "unknown",
+            "backswingMs": tempo.get("backswingMs"),
+            "downswingMs": downswing_ms or None,
+            "ratio": ratio or None,
+            "confidence": round(_clamp(0.35 + min(tracking_score, 0.3)), 2) if ratio else 0.0,
+        },
+        "pathReleasePair": {
+            "label": f"{path_label}_{release_label}" if path_label and release_label != "unknown" else "unknown",
+            "pathLabel": path_label or "unknown",
+            "releaseLabel": release_label,
+            "confidence": round(_clamp(min(path_conf or 1.0, release_confidence or 1.0)), 2) if path_label and release_label != "unknown" else 0.0,
+            "source": "club_path_release_proxy",
+        },
+    }
+
+
 def _coach_comments(
     tempo: Dict[str, object],
     shaft_plane: Dict[str, object],
@@ -1423,6 +1531,7 @@ def _coach_comments(
     ball: Optional[Dict[str, object]] = None,
     swing_plane: Optional[Dict[str, object]] = None,
     body_metrics: Optional[Dict[str, object]] = None,
+    fusion_metrics: Optional[Dict[str, object]] = None,
 ) -> List[str]:
     return build_coach_comments(
         tempo,
@@ -1434,6 +1543,7 @@ def _coach_comments(
         ball or {},
         swing_plane or {},
         body_metrics or {},
+        fusion_metrics or {},
     )
 
 
@@ -1531,6 +1641,11 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     dy = motion_track[impact_idx]["y"] - motion_track[top_idx]["y"]
     swing_label = "inside-out" if dx >= 0 else "outside-in"
     swing_conf = round(_clamp(abs(dx) / (abs(dx) + abs(dy) + 1e-6)), 2)
+    swing_plane = {
+        "label": swing_label,
+        "confidence": swing_conf,
+        "source": motion_source,
+    }
 
     backswing_ms, downswing_ms, ratio = _tempo(address_ms, top_ms, impact_ms)
     tempo = {
@@ -1562,6 +1677,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     tracking = _tracking_quality(frames, club_head_track, handle_track, club_track, ball_track, person_track)
     ball = _ball_metric(ball_track, impact_ms, width, height)
     body_metrics = _body_pose_metrics(body_artifact, address_ms, top_ms, impact_ms)
+    fusion_metrics = _fusion_metrics(tempo, shaft, backswing, impact_stability, swing_plane, body_metrics, tracking)
     wrist_sources: Dict[str, int] = {}
     for point in wrist_track:
         source_name = str(point.get("wristSource") or "unknown")
@@ -1578,13 +1694,33 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         2,
     )
 
-    swing_plane = {
-        "label": swing_label,
-        "confidence": swing_conf,
-        "source": motion_source,
-    }
-    coach_summary = _coach_comments(tempo, shaft, backswing, impact_stability, readiness, tracking, ball, swing_plane, body_metrics)
-    coach_findings = build_coach_finding_debug(tempo, shaft, backswing, impact_stability, readiness, tracking, ball, swing_plane, body_metrics)
+    coach_summary = _coach_comments(tempo, shaft, backswing, impact_stability, readiness, tracking, ball, swing_plane, body_metrics, fusion_metrics)
+    coach_findings = build_coach_finding_debug(
+        tempo,
+        shaft,
+        backswing,
+        impact_stability,
+        readiness,
+        tracking,
+        ball,
+        swing_plane,
+        body_metrics,
+        fusion_metrics,
+        suppress_redundant=True,
+    )
+    coach_findings_debug = build_coach_finding_debug(
+        tempo,
+        shaft,
+        backswing,
+        impact_stability,
+        readiness,
+        tracking,
+        ball,
+        swing_plane,
+        body_metrics,
+        fusion_metrics,
+        limit=12,
+    )
     summary = f"service7 분석 완료: tempo {ratio}:1, shaft {shaft['label']}, backswing {backswing['label']}."
     duration_ms = _safe_int(meta.get("durationMs"), 0) or (_safe_int(frames[-1].get("_t_ms"), 0) if frames else 0)
 
@@ -1610,6 +1746,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "trackingQuality": tracking,
             "ball": ball,
             "body": body_metrics,
+            "fusion": fusion_metrics,
             "eventTiming": {
                 "address": address_ms,
                 "top": top_ms,
@@ -1653,6 +1790,6 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "speedMax": float(max(speeds)) if speeds else 0.0,
             "shaftSamples": float(shaft.get("sampleCount") or 0),
             "trackingScore": float(tracking["score"]),
-            "coachFindings": coach_findings,
+            "coachFindings": coach_findings_debug,
         },
     }

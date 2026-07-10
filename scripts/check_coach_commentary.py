@@ -46,6 +46,24 @@ def run_fast_low_confidence_case() -> None:
         {"launchDirection": "unknown"},
         {"label": "outside-in", "confidence": 0.2, "source": "club_box_endpoint"},
     )
+    display_debug = build_coach_finding_debug(
+        {"backswingMs": 352, "downswingMs": 175, "ratio": 2.01},
+        {"label": "flat", "confidence": 0.27, "angleDeg": 15.3, "source": "club_box_proxy"},
+        {"label": "adequate", "score": 0.61, "clubTravelRatio": 0.13, "handTravelRatio": 0.13, "source": "pose_wrist"},
+        {"label": "unstable", "score": 0},
+        {"label": "unknown"},
+        {"label": "weak", "score": 0.11, "personFrames": 0, "ballFrames": 0},
+        {"launchDirection": "unknown"},
+        {"label": "outside-in", "confidence": 0.2, "source": "club_box_endpoint"},
+        {},
+        {
+            "releaseTiming": {
+                "label": "late_proxy",
+                "confidence": 0.5,
+            }
+        },
+        suppress_redundant=True,
+    )
 
     assert len(comments) == 6
     assert_contains(comments, "빠른 전환, 낮은 샤프트, 임팩트 불안정")
@@ -61,6 +79,7 @@ def run_fast_low_confidence_case() -> None:
     assert "펌프 드릴" in str(debug[0]["drill"])
     assert "몸 앞" in str(debug[0]["checkpoint"])
     assert debug[1]["key"] == "impact_unstable"
+    assert "release_late_proxy" not in keys(display_debug)
     assert "tempo_fast" in keys(debug)
     assert "shaft_flat" in keys(debug)
     assert "ball_missing" in keys(debug)

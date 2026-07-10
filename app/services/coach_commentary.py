@@ -55,13 +55,14 @@ class CoachFinding:
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "info": 3}
 CATEGORY_ORDER = {
     "pattern": 0,
-    "tempo": 1,
-    "backswing": 2,
-    "body": 3,
-    "shaft_plane": 4,
-    "swing_path": 5,
-    "impact": 6,
-    "quality": 7,
+    "fusion": 1,
+    "tempo": 2,
+    "backswing": 3,
+    "body": 4,
+    "shaft_plane": 5,
+    "swing_path": 6,
+    "impact": 7,
+    "quality": 8,
 }
 
 
@@ -478,6 +479,84 @@ def _body_findings(body_metrics: Dict[str, object]) -> List[CoachFinding]:
     return findings
 
 
+def _fusion_findings(fusion_metrics: Dict[str, object]) -> List[CoachFinding]:
+    findings: List[CoachFinding] = []
+    release = fusion_metrics.get("releaseTiming")
+    if isinstance(release, dict):
+        label = str(release.get("label") or "")
+        confidence = _safe_float(release.get("confidence"), 0.0)
+        if label == "late_proxy" and confidence >= 0.25:
+            findings.append(
+                CoachFinding(
+                    key="release_late_proxy",
+                    category="fusion",
+                    severity="medium",
+                    confidence=confidence,
+                    evidence="릴리스 타이밍 proxy가 늦은 쪽으로 잡힙니다.",
+                    interpretation="클럽이 몸 뒤에 남은 상태에서 임팩트 직전 손으로 맞추는 보상이 생길 수 있습니다.",
+                    action="전환 이후 클럽을 몸 앞 공간에 두고 회전으로 임팩트를 통과하는 느낌을 먼저 만드세요.",
+                    priority="릴리스 타이밍",
+                    drill="허리 높이 펌프 드릴에서 그립과 클럽헤드가 오른쪽 허벅지 앞 공간을 지나게 만들기.",
+                    checkpoint="임팩트 직전 클럽헤드가 손 뒤에서 급히 따라오는지 확인합니다.",
+                    caution="공/페이스 데이터가 없는 tempo-shaft-impact proxy입니다.",
+                )
+            )
+        elif label == "early_or_cast_proxy" and confidence >= 0.3:
+            findings.append(
+                CoachFinding(
+                    key="release_cast_proxy",
+                    category="fusion",
+                    severity="medium",
+                    confidence=confidence,
+                    evidence="릴리스 타이밍 proxy가 손/팔 선행 쪽으로 잡힙니다.",
+                    interpretation="전환 초반 손이 먼저 나가면 샤프트가 세워지고 바깥에서 덮이는 궤도가 되기 쉽습니다.",
+                    action="손을 공 쪽으로 던지기보다 오른팔을 몸 앞에 둔 채 가슴 회전으로 내려오세요.",
+                    priority="릴리스 타이밍",
+                    drill="오른팔 수건 하프스윙으로 전환 첫 1/3에서 손이 튀어나가지 않게 반복.",
+                    checkpoint="다운스윙 초반 그립이 공 쪽으로 먼저 밀리지 않는지 봅니다.",
+                    caution="공/페이스 데이터가 없는 tempo-shaft-impact proxy입니다.",
+                )
+            )
+
+    sequencing = fusion_metrics.get("sequencing")
+    if isinstance(sequencing, dict):
+        label = str(sequencing.get("label") or "")
+        confidence = _safe_float(sequencing.get("confidence"), 0.0)
+        if label == "rushed_transition_proxy" and confidence >= 0.35:
+            findings.append(
+                CoachFinding(
+                    key="sequence_rushed_proxy",
+                    category="fusion",
+                    severity="medium",
+                    confidence=confidence,
+                    evidence="시퀀싱 proxy가 빠른 전환을 가리킵니다.",
+                    interpretation="탑 이후 하체-몸통-팔-클럽 순서가 만들어지기 전에 손이 내려올 가능성이 있습니다.",
+                    action="스윙 속도를 줄이고 탑에서 하체/가슴 회전이 먼저 시작되는 느낌을 확인하세요.",
+                    priority="전환 순서",
+                    drill="탑 정지 1초 후 50% 속도로 골반-가슴-팔 순서만 확인하는 빈스윙.",
+                    checkpoint="다운스윙 첫 움직임이 손이 아니라 몸 회전인지 봅니다.",
+                    caution="2D pose/tempo 기반 proxy입니다.",
+                )
+            )
+        elif label == "arms_dominant_proxy" and confidence >= 0.3:
+            findings.append(
+                CoachFinding(
+                    key="sequence_arms_dominant_proxy",
+                    category="fusion",
+                    severity="medium",
+                    confidence=confidence,
+                    evidence="시퀀싱 proxy가 손/팔 우세 패턴을 가리킵니다.",
+                    interpretation="회전 여유가 생기기 전에 팔이 먼저 내려오면 임팩트 전후 재현성이 흔들릴 수 있습니다.",
+                    action="팔을 더 빠르게 쓰기보다 3/4 백스윙에서 몸통 회전과 손 위치를 먼저 맞추세요.",
+                    priority="전환 순서",
+                    drill="3/4 탑 정지 후 가슴이 공 쪽으로 돌아온 다음 손이 내려오는 순서 드릴.",
+                    checkpoint="탑에서 손 높이보다 어깨선 변화와 가슴 회전 시작이 먼저 보이는지 확인합니다.",
+                    caution="2D pose/tempo 기반 proxy입니다.",
+                )
+            )
+    return findings
+
+
 def _finding_by_key(findings: List[CoachFinding], key: str) -> Optional[CoachFinding]:
     return next((finding for finding in findings if finding.key == key), None)
 
@@ -573,11 +652,11 @@ def _suppress_redundant_summary_findings(findings: List[CoachFinding]) -> List[C
     keys = {finding.key for finding in findings}
     suppressed = set()
     if "pattern_late_club_release" in keys:
-        suppressed.update({"tempo_fast", "tempo_rushed_transition", "shaft_flat"})
+        suppressed.update({"tempo_fast", "tempo_rushed_transition", "shaft_flat", "release_late_proxy"})
     if "pattern_over_the_top" in keys:
-        suppressed.update({"shaft_steep", "path_outside_in"})
+        suppressed.update({"shaft_steep", "path_outside_in", "release_cast_proxy"})
     if "pattern_rushed_short_swing" in keys:
-        suppressed.add("backswing_short")
+        suppressed.update({"backswing_short", "sequence_arms_dominant_proxy", "sequence_rushed_proxy"})
     return [finding for finding in findings if finding.key not in suppressed]
 
 
@@ -591,6 +670,7 @@ def build_coach_findings(
     ball: Dict[str, object],
     swing_plane: Dict[str, object],
     body_metrics: Optional[Dict[str, object]] = None,
+    fusion_metrics: Optional[Dict[str, object]] = None,
 ) -> List[CoachFinding]:
     findings: List[CoachFinding] = []
     for candidate in (
@@ -603,6 +683,7 @@ def build_coach_findings(
         if candidate:
             findings.append(candidate)
     findings.extend(_body_findings(body_metrics or {}))
+    findings.extend(_fusion_findings(fusion_metrics or {}))
     findings.extend(_quality_findings(tracking, ball, readiness))
     findings.extend(_composite_findings(findings))
     return _rank_findings(findings)
@@ -618,6 +699,7 @@ def build_coach_comments(
     ball: Dict[str, object],
     swing_plane: Dict[str, object],
     body_metrics: Optional[Dict[str, object]] = None,
+    fusion_metrics: Optional[Dict[str, object]] = None,
     *,
     limit: int = 6,
 ) -> List[str]:
@@ -634,6 +716,7 @@ def build_coach_comments(
                 ball,
                 swing_plane,
                 body_metrics or {},
+                fusion_metrics or {},
             )
         )
     ]
@@ -659,20 +742,26 @@ def build_coach_finding_debug(
     ball: Dict[str, object],
     swing_plane: Dict[str, object],
     body_metrics: Optional[Dict[str, object]] = None,
+    fusion_metrics: Optional[Dict[str, object]] = None,
     *,
     limit: int = 8,
+    suppress_redundant: bool = False,
 ) -> List[Dict[str, object]]:
+    findings = build_coach_findings(
+        tempo,
+        shaft_plane,
+        backswing,
+        impact_stability,
+        readiness,
+        tracking,
+        ball,
+        swing_plane,
+        body_metrics or {},
+        fusion_metrics or {},
+    )
+    if suppress_redundant:
+        findings = _suppress_redundant_summary_findings(findings)
     return [
         finding.to_dict()
-        for finding in build_coach_findings(
-            tempo,
-            shaft_plane,
-            backswing,
-            impact_stability,
-            readiness,
-            tracking,
-            ball,
-            swing_plane,
-            body_metrics or {},
-        )[:limit]
+        for finding in findings[:limit]
     ]
