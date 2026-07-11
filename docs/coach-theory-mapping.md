@@ -119,6 +119,22 @@ handle, ball, or person tracking is sparse.
 - `metrics.fusion` preservation;
 - event timing and progress preservation.
 
+## Review Workflow
+
+Use `scripts/check_coach_commentary.py` for pass/fail regression coverage.
+Use `scripts/preview_coach_findings.py` when changing coaching language or
+priority rules, because it prints representative findings in the same order a
+coach or user would read them:
+
+```bash
+python3 scripts/preview_coach_findings.py
+python3 scripts/preview_coach_findings.py low_tracking_late_release --json
+```
+
+The preview cases should include at least one weak-tracking sample, one stable
+neutral sample, and one strong pattern sample. If a new user video reveals a
+recurring failure mode, add a reduced metric case here before tuning rules.
+
 ## References
 
 - GolfDB event sequencing: https://arxiv.org/abs/1903.06528
