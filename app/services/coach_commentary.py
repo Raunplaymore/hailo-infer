@@ -7,7 +7,7 @@ actionable checkpoint.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from typing import Dict, List, Optional
 
@@ -685,6 +685,43 @@ def _suppress_redundant_summary_findings(findings: List[CoachFinding]) -> List[C
     return [finding for finding in findings if finding.key not in suppressed]
 
 
+def _tracking_confidence_cap(tracking: Dict[str, object]) -> float:
+    label = str(tracking.get("label") or "")
+    score = _safe_float(tracking.get("score") or tracking.get("confidence"), 1.0)
+    if label == "weak" or score < 0.25:
+        return 0.3
+    if score < 0.5:
+        return 0.55
+    return 1.0
+
+
+def _with_quality_caution(finding: CoachFinding, caution: str) -> CoachFinding:
+    if finding.caution and caution in finding.caution:
+        return finding
+    if finding.caution:
+        return replace(finding, caution=f"{finding.caution} {caution}")
+    return replace(finding, caution=caution)
+
+
+def _apply_tracking_quality_gate(findings: List[CoachFinding], tracking: Dict[str, object]) -> List[CoachFinding]:
+    cap = _tracking_confidence_cap(tracking)
+    if cap >= 1.0:
+        return findings
+
+    caution = "추적 품질이 낮아 확정 진단이 아니라 반복 확인용 참고 신호로 보세요."
+    adjusted: List[CoachFinding] = []
+    for finding in findings:
+        if finding.category == "quality":
+            adjusted.append(finding)
+            continue
+        confidence = min(finding.confidence, cap)
+        gated = replace(finding, confidence=confidence)
+        if cap <= 0.55:
+            gated = _with_quality_caution(gated, caution)
+        adjusted.append(gated)
+    return adjusted
+
+
 def build_coach_findings(
     tempo: Dict[str, object],
     shaft_plane: Dict[str, object],
@@ -711,6 +748,7 @@ def build_coach_findings(
     findings.extend(_fusion_findings(fusion_metrics or {}))
     findings.extend(_quality_findings(tracking, ball, readiness))
     findings.extend(_composite_findings(findings))
+    findings = _apply_tracking_quality_gate(findings, tracking)
     return _rank_findings(findings)
 
 

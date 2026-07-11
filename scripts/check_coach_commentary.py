@@ -83,10 +83,13 @@ def run_fast_low_confidence_case() -> None:
     assert_not_contains(comments, "outside-in")
     assert debug[0]["key"] == "pattern_late_club_release"
     assert debug[0]["priority"] == "1순위 패턴"
+    assert debug[0]["confidence"] <= 0.3
+    assert "추적 품질이 낮아" in str(debug[0]["caution"])
     assert "전환-릴리스 패턴" in str(debug[0]["theory"])
     assert "펌프 드릴" in str(debug[0]["drill"])
     assert "몸 앞" in str(debug[0]["checkpoint"])
     assert debug[1]["key"] == "impact_unstable"
+    assert debug[1]["confidence"] <= 0.3
     assert "release_late_proxy" not in keys(display_debug)
     assert "tempo_fast" in keys(debug)
     assert "shaft_flat" in keys(debug)

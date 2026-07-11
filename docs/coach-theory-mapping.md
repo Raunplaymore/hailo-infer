@@ -30,6 +30,12 @@ the current system produces prioritized, evidence-bounded coaching prompts from
    - The UI should show the composite first and suppress redundant sub-findings
      in the summary view.
 
+5. Tracking quality caps diagnostic strength.
+   - Swing findings can still be useful when tracking is weak, but their
+     confidence must be capped and the wording must remain provisional.
+   - Quality findings themselves are not capped, because they explain why the
+     rest of the analysis should be treated carefully.
+
 ## Finding Map
 
 | Finding | Signals | Theory rationale | Required caution |
@@ -80,6 +86,20 @@ Head stability and shoulder turn are 2D pose proxies:
 These should never be described as exact head movement, shoulder turn degree, or
 X-factor.
 
+### Quality Gate
+
+Before ranking final coach findings, non-quality findings are adjusted by
+`trackingQuality`:
+
+- `tracking.label == weak` or score `< 0.25`: cap confidence at `0.30`.
+- score `< 0.50`: cap confidence at `0.55`.
+- score `>= 0.50`: no tracking cap.
+
+When the cap applies, non-quality findings must include caution text that the
+finding is a reference signal for repeated confirmation, not a final diagnosis.
+This prevents strong-looking pattern labels from overclaiming when club head,
+handle, ball, or person tracking is sparse.
+
 ## Validation Expectations
 
 `scripts/check_coach_commentary.py` must cover:
@@ -90,6 +110,7 @@ X-factor.
 - body pose findings for unstable head and limited shoulder proxy;
 - fusion proxy findings for rushed sequence and cast/hand-leading release;
 - preservation of `theory` rationale in structured `coachFindings`.
+- tracking quality caps low-confidence swing findings and adds caution text.
 
 `pi_web/scripts/check-analysis-normalization.mjs` must cover:
 
