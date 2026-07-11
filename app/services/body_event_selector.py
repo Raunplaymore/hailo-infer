@@ -233,6 +233,83 @@ SEQUENCE_FEATURE_PRIORITIES = {
 }
 
 
+STATE_MACHINE_METHOD_BIAS = {
+    "feature-vote-early-top-cluster": 0.25,
+    "feature-vote-early": 0.35,
+    "feature-sequence": 0.0,
+    "feature-vote-offset-fallback": 0.15,
+}
+
+
+def state_machine_score(events: Dict[str, Any], debug: Optional[Dict[str, Any]] = None, method: str = "") -> tuple[float, list[str]]:
+    """Score whether event times obey a plausible swing phase sequence.
+
+    This is not an optical-flow state machine yet. It is the first guard layer:
+    candidate event sequences still come from pose feature votes, but they must
+    pass Ready -> Backswing -> Top -> Downswing -> Impact Candidate -> Finish
+    timing constraints before the selector trusts them.
+    """
+
+    debug = debug or {}
+    address = _safe_float(events.get("addressMs"), 0.0)
+    top = _safe_float(events.get("topMs"), address)
+    impact = _safe_float(events.get("impactMs"), top)
+    finish = _safe_float(events.get("finishMs"), impact)
+    top_gap = top - address
+    down_gap = impact - top
+    finish_gap = finish - impact
+    reasons: list[str] = []
+
+    if top <= address:
+        reasons.append("top_not_after_address")
+    if impact <= top:
+        reasons.append("impact_not_after_top")
+    if finish <= impact:
+        reasons.append("finish_not_after_impact")
+    if reasons:
+        return float("inf"), reasons
+
+    score = STATE_MACHINE_METHOD_BIAS.get(method, 0.2)
+
+    # Very early tops are usually the first noisy cluster, not a real top. If a
+    # clip genuinely starts near top, we still require refinement evidence.
+    top_refined = bool(debug.get("topRefined"))
+    if top_gap < 120.0 and not top_refined:
+        reasons.append("top_gap_too_short_without_refinement")
+        score += 6.0
+    elif top_gap < 160.0:
+        reasons.append("top_gap_short")
+        score += 1.2
+    elif top_gap > 950.0:
+        reasons.append("top_gap_too_late")
+        score += 2.0
+
+    if down_gap < 80.0:
+        reasons.append("downswing_gap_too_short")
+        score += 5.0
+    elif down_gap > 620.0:
+        reasons.append("downswing_gap_too_long")
+        score += 2.0
+
+    if finish_gap < 120.0:
+        reasons.append("finish_gap_too_short")
+        score += 4.0
+    elif finish_gap > 900.0:
+        reasons.append("finish_gap_too_long")
+        score += 1.5
+
+    # Target windows are intentionally broad. The purpose is to rank plausible
+    # sequences, not force a single tempo model across all players.
+    target_top_gap = 340.0
+    target_down_gap = 190.0
+    target_finish_gap = 330.0
+    score += abs(top_gap - target_top_gap) / 360.0
+    score += abs(down_gap - target_down_gap) / 320.0
+    score += abs(finish_gap - target_finish_gap) / 420.0
+
+    return score, reasons
+
+
 def cluster_candidate_times(candidates: list[tuple[float, float, str]], band_ms: float = 70.0) -> list[Dict[str, Any]]:
     if not candidates:
         return []
@@ -509,9 +586,16 @@ def early_top_cluster_candidate(clusters: list[Dict[str, Any]]) -> tuple[Optiona
 def select_body_events(body_payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     sequence_ranked = feature_sequence_ranked(body_payload)
     vote = feature_vote_events(body_payload)
-    candidate_name = None
-    candidate_events = None
-    candidate_debug: Dict[str, Any] = {}
+    candidates: list[tuple[float, str, Dict[str, Any], Dict[str, Any]]] = []
+
+    def add_candidate(method: str, events: Dict[str, Any], debug: Optional[Dict[str, Any]] = None) -> None:
+        if not events:
+            return
+        score, reasons = state_machine_score(events, debug, method)
+        next_debug = {**(debug or {})}
+        next_debug["stateMachineScore"] = round(score, 3) if math.isfinite(score) else None
+        next_debug["stateMachineReasons"] = reasons
+        candidates.append((score, method, events, next_debug))
 
     if vote.get("available"):
         events = vote.get("events", {})
@@ -519,18 +603,14 @@ def select_body_events(body_payload: Optional[Dict[str, Any]]) -> Dict[str, Any]
         if clusters:
             early_candidate_events, early_candidate_debug = early_top_cluster_candidate(clusters)
             if early_candidate_events:
-                candidate_name = "feature-vote-early-top-cluster"
-                candidate_events = early_candidate_events
-                candidate_debug = early_candidate_debug
+                add_candidate("feature-vote-early-top-cluster", early_candidate_events, early_candidate_debug)
         address_t = _safe_float(events.get("addressMs"), 9999.0)
         top_t = _safe_float(events.get("topMs"), 9999.0)
         impact_t = _safe_float(events.get("impactMs"), 9999.0)
         finish_t = _safe_float(events.get("finishMs"), 9999.0)
         top_weight = _safe_float(vote.get("debug", {}).get("topWeight"), 0.0)
-        if candidate_events is None and address_t <= 120.0 and top_t <= 260.0 and impact_t <= 760.0 and finish_t <= 1050.0 and top_weight >= 9.0:
-            candidate_name = "feature-vote-early"
-            candidate_events = events
-            candidate_debug = vote.get("debug", {})
+        if address_t <= 120.0 and top_t <= 260.0 and impact_t <= 760.0 and finish_t <= 1050.0 and top_weight >= 9.0:
+            add_candidate("feature-vote-early", events, vote.get("debug", {}))
 
     if sequence_ranked:
         sequence_score, sequence_events, sequence_debug = sequence_ranked[0]
@@ -551,38 +631,45 @@ def select_body_events(body_payload: Optional[Dict[str, Any]]) -> Dict[str, Any]
                     key=lambda item: _safe_float(item[2].get("startMs"), 9999.0),
                 )
         start_t = _safe_float(sequence_events.get("addressMs"), 0.0)
-        if candidate_events is None and start_t >= 120.0 and sequence_score <= 2.6:
-            candidate_name = "feature-sequence"
-            candidate_events = sequence_events
-            candidate_debug = {"score": round(sequence_score, 3), **sequence_debug}
+        if start_t >= 120.0 and sequence_score <= 2.6:
+            add_candidate("feature-sequence", sequence_events, {"score": round(sequence_score, 3), **sequence_debug})
 
-    if candidate_events is None:
-        clusters = vote.get("clusters") if isinstance(vote.get("clusters"), list) else []
-        fallback: list[tuple[float, Dict[str, Any], Dict[str, Any]]] = []
-        for cluster in clusters[:10]:
-            start_t = _safe_float(cluster.get("t"), 0.0)
-            candidate = feature_vote_events_from_clusters(clusters, start_t, use_offset_model=True)
-            if not candidate.get("available"):
-                continue
-            events = candidate["events"]
-            top_gap = _safe_float(events.get("topMs"), 0.0) - _safe_float(events.get("addressMs"), 0.0)
-            impact_gap = _safe_float(events.get("impactMs"), 0.0) - _safe_float(events.get("topMs"), 0.0)
-            finish_gap = _safe_float(events.get("finishMs"), 0.0) - _safe_float(events.get("impactMs"), 0.0)
-            score = abs(top_gap - 360.0) / 260.0 + abs(impact_gap - 170.0) / 220.0 + abs(finish_gap - 320.0) / 320.0
-            fallback.append((score, events, candidate.get("debug", {})))
-        if fallback:
-            score, events, debug = sorted(fallback, key=lambda item: item[0])[0]
-            candidate_name = "feature-vote-offset-fallback"
-            candidate_events = events
-            candidate_debug = {"score": round(score, 3), **debug}
+    clusters = vote.get("clusters") if isinstance(vote.get("clusters"), list) else []
+    for cluster in clusters[:10]:
+        start_t = _safe_float(cluster.get("t"), 0.0)
+        candidate = feature_vote_events_from_clusters(clusters, start_t, use_offset_model=True)
+        if not candidate.get("available"):
+            continue
+        events = candidate["events"]
+        top_gap = _safe_float(events.get("topMs"), 0.0) - _safe_float(events.get("addressMs"), 0.0)
+        impact_gap = _safe_float(events.get("impactMs"), 0.0) - _safe_float(events.get("topMs"), 0.0)
+        finish_gap = _safe_float(events.get("finishMs"), 0.0) - _safe_float(events.get("impactMs"), 0.0)
+        legacy_score = abs(top_gap - 360.0) / 260.0 + abs(impact_gap - 170.0) / 220.0 + abs(finish_gap - 320.0) / 320.0
+        add_candidate(
+            "feature-vote-offset-fallback",
+            events,
+            {"score": round(legacy_score, 3), **candidate.get("debug", {})},
+        )
 
-    if candidate_events is None:
+    finite_candidates = [candidate for candidate in candidates if math.isfinite(candidate[0])]
+    if not finite_candidates:
         return {"available": False, "sequenceRanked": sequence_ranked, "vote": vote}
+    state_ranked = sorted(finite_candidates, key=lambda item: item[0])
+    _score, candidate_name, candidate_events, candidate_debug = state_ranked[0]
     return {
         "available": True,
         "method": candidate_name,
         "events": candidate_events,
         "debug": candidate_debug,
+        "stateMachineRanked": [
+            {
+                "score": round(score, 3),
+                "method": method,
+                "events": events,
+                "debug": debug,
+            }
+            for score, method, events, debug in state_ranked[:8]
+        ],
         "sequenceRanked": sequence_ranked,
         "vote": vote,
     }
