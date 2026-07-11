@@ -25,6 +25,13 @@ def keys(debug: list[dict[str, object]]) -> list[object]:
     return [item["key"] for item in debug]
 
 
+def finding(debug: list[dict[str, object]], key: str) -> dict[str, object]:
+    for item in debug:
+        if item.get("key") == key:
+            return item
+    raise AssertionError(f"missing finding {key!r} in debug: {debug}")
+
+
 def run_fast_low_confidence_case() -> None:
     comments = build_coach_comments(
         {"backswingMs": 352, "downswingMs": 175, "ratio": 2.01},
@@ -76,6 +83,7 @@ def run_fast_low_confidence_case() -> None:
     assert_not_contains(comments, "outside-in")
     assert debug[0]["key"] == "pattern_late_club_release"
     assert debug[0]["priority"] == "1순위 패턴"
+    assert "전환-릴리스 패턴" in str(debug[0]["theory"])
     assert "펌프 드릴" in str(debug[0]["drill"])
     assert "몸 앞" in str(debug[0]["checkpoint"])
     assert debug[1]["key"] == "impact_unstable"
@@ -135,6 +143,7 @@ def run_short_steep_case() -> None:
     assert_not_contains(comments, "클럽 경로가 outside-in")
     assert debug[0]["key"] == "pattern_over_the_top"
     assert debug[0]["priority"] == "1순위 패턴"
+    assert "오버더탑 패턴" in str(debug[0]["theory"])
     assert "오른팔 수건" in str(debug[0]["drill"])
     assert "다운스윙 첫 1/3" in str(debug[0]["checkpoint"])
     assert "pattern_rushed_short_swing" in keys(debug)
@@ -206,6 +215,25 @@ def run_fusion_sequence_cases() -> None:
     assert_contains(rushed_comments, "시퀀싱 proxy가 빠른 전환")
     assert_contains(rushed_comments, "하체-몸통-팔-클럽 순서")
     assert_contains(rushed_comments, "2D pose/tempo 기반 proxy")
+    rushed_debug = build_coach_finding_debug(
+        {"backswingMs": 260, "downswingMs": 180, "ratio": 1.44},
+        {"label": "neutral", "confidence": 0.52, "angleDeg": 46.0, "source": "head_handle"},
+        {"label": "adequate", "score": 0.72, "clubTravelRatio": 0.32, "source": "club_motion"},
+        {"label": "stable", "score": 0.74},
+        {"label": "ready"},
+        {"label": "fair", "score": 0.46, "personFrames": 18, "ballFrames": 1},
+        {"launchDirection": "unknown"},
+        {"label": "neutral", "confidence": 0.36, "source": "hybrid"},
+        {},
+        {
+            "sequencing": {
+                "label": "rushed_transition_proxy",
+                "confidence": 0.64,
+                "evidence": ["tempo_rushed"],
+            }
+        },
+    )
+    assert "키네마틱 시퀀스 proxy" in str(finding(rushed_debug, "sequence_rushed_proxy")["theory"])
 
     cast_comments = build_coach_comments(
         {"backswingMs": 320, "downswingMs": 130, "ratio": 2.46},

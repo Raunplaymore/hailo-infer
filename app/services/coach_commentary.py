@@ -49,6 +49,7 @@ class CoachFinding:
             "drill": self.drill,
             "checkpoint": self.checkpoint,
             "caution": self.caution,
+            "theory": _theory_for(self.key, self.category),
         }
 
 
@@ -64,6 +65,30 @@ CATEGORY_ORDER = {
     "impact": 7,
     "quality": 8,
 }
+
+THEORY_BY_KEY = {
+    "pattern_late_club_release": "전환-릴리스 패턴: 빠른 전환, 낮은 샤프트, 임팩트 불안정의 조합을 우선 교정합니다.",
+    "pattern_over_the_top": "오버더탑 패턴: 전환 초반 손/상체 선행과 steep shaft, outside-in 경로 조합을 봅니다.",
+    "pattern_rushed_short_swing": "리듬-회전 여유 패턴: 작은 백스윙과 빠른 전환이 손 위주 보상을 만들 수 있습니다.",
+    "release_late_proxy": "릴리스 타이밍 proxy: 샤프트 플레인과 임팩트 안정성으로 클럽이 몸 뒤에 남는 신호를 봅니다.",
+    "release_cast_proxy": "캐스팅/손 선행 proxy: steep shaft와 임팩트 불안정으로 전환 초반 손/팔 선행을 의심합니다.",
+    "sequence_rushed_proxy": "키네마틱 시퀀스 proxy: 하체-몸통-팔-클럽 순서가 만들어지기 전 손이 내려오는지 봅니다.",
+    "sequence_arms_dominant_proxy": "키네마틱 시퀀스 proxy: 회전 여유보다 팔 동작이 먼저 내려오는 패턴을 봅니다.",
+}
+
+THEORY_BY_CATEGORY = {
+    "tempo": "스윙 템포: 백스윙-다운스윙 시간 비율과 전환 리듬으로 sequencing 위험을 판단합니다.",
+    "backswing": "백스윙 구조: 탑까지의 손/클럽 이동량과 회전 여유가 다운스윙 시간과 재현성에 영향을 줍니다.",
+    "body": "몸통/축 안정성 proxy: 2D pose keypoint로 머리 이동과 어깨선 변화를 참고합니다.",
+    "shaft_plane": "샤프트 플레인: 다운스윙 중 클럽이 낮게 뒤에 남는지, 또는 세워져 덮이는지를 봅니다.",
+    "swing_path": "클럽 경로 proxy: 2D 클럽 이동 방향으로 outside-in/inside-out 경향만 참고합니다.",
+    "impact": "임팩트 재현성: 임팩트 전후 클럽 위치 변화로 릴리스/회전 타이밍 흔들림을 봅니다.",
+    "quality": "분석 품질: 검출/pose/ball tracking 부족 시 진단 강도를 낮춥니다.",
+}
+
+
+def _theory_for(key: str, category: str) -> Optional[str]:
+    return THEORY_BY_KEY.get(key) or THEORY_BY_CATEGORY.get(category)
 
 
 def _safe_float(value: object, default: float = 0.0) -> float:
