@@ -27,8 +27,9 @@ jobs:
 
       - name: Check coach commentary rules
         run: |
-          PYTHONPYCACHEPREFIX=/tmp/hailo_pycache python -m py_compile app/services/coach_commentary.py scripts/check_coach_commentary.py
+          PYTHONPYCACHEPREFIX=/tmp/hailo_pycache python -m py_compile app/services/coach_commentary.py scripts/check_coach_commentary.py scripts/preview_coach_findings.py
           PYTHONDONTWRITEBYTECODE=1 python scripts/check_coach_commentary.py
+          PYTHONDONTWRITEBYTECODE=1 python scripts/preview_coach_findings.py low_tracking_late_release --json >/tmp/coach_findings_preview.json
 
       - name: Set up Tailscale
         uses: tailscale/github-action@v2
