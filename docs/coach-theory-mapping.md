@@ -41,6 +41,7 @@ the current system produces prioritized, evidence-bounded coaching prompts from
 | Finding | Signals | Theory rationale | Required caution |
 | --- | --- | --- | --- |
 | `pattern_late_club_release` | fast/rushed tempo, flat shaft, unstable impact | Club may stay behind the body and require a late hand compensation near impact. | Mark as proxy when shaft uses `club_box_proxy` or tracking is weak. |
+| `pattern_stuck_inside_release` | flat shaft, inside-out path, unstable impact | Club may get trapped behind the body, approach too far from the inside, then require late hand compensation. | Avoid calling it a hook/push unless ball flight confirms it. |
 | `pattern_over_the_top` | steep shaft, outside-in path or rushed transition, unstable impact | Hands/upper body may dominate transition, moving the club over the plane. | Avoid ball-flight claims unless ball data exists. |
 | `pattern_rushed_short_swing` | short backswing and fast/rushed tempo | Downswing starts before rotation and hand/club travel have enough time to organize. | Confirm backswing source, because pose wrist and club box have different reliability. |
 | `release_late_proxy` | flat shaft and unstable impact | Release timing may be late because the club is still behind the body. | State that face/ball data is missing. |
@@ -105,6 +106,7 @@ handle, ball, or person tracking is sparse.
 `scripts/check_coach_commentary.py` must cover:
 
 - late release composite suppression of redundant tempo/shaft findings;
+- stuck-inside release composite suppression of redundant flat-shaft/path findings;
 - over-the-top composite suppression of redundant shaft/path findings;
 - short backswing plus rushed tempo composite;
 - body pose findings for unstable head and limited shoulder proxy;
@@ -132,8 +134,9 @@ python3 scripts/preview_coach_findings.py low_tracking_late_release --json
 ```
 
 The preview cases should include at least one weak-tracking sample, one stable
-neutral sample, and one strong pattern sample. If a new user video reveals a
-recurring failure mode, add a reduced metric case here before tuning rules.
+neutral sample, one over-the-top sample, and one stuck-inside/late-release sample.
+If a new user video reveals a recurring failure mode, add a reduced metric case
+here before tuning rules.
 
 ## References
 

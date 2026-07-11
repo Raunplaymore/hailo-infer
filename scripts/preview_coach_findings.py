@@ -63,6 +63,19 @@ CASES: dict[str, MetricCase] = {
         "body_metrics": {},
         "fusion_metrics": {},
     },
+    "stuck_inside_release": {
+        "description": "Flat shaft, inside-out path, and unstable impact. Similar to a club stuck behind the body pattern.",
+        "tempo": {"backswingMs": 435, "downswingMs": 134, "ratio": 3.25},
+        "shaft_plane": {"label": "flat", "confidence": 0.45, "angleDeg": 30.1, "source": "club_box_proxy"},
+        "backswing": {"label": "adequate", "score": 0.97, "clubTravelRatio": 0.41, "source": "club_motion"},
+        "impact_stability": {"label": "unstable", "score": 0.22},
+        "readiness": {"label": "unknown"},
+        "tracking": {"label": "fair", "score": 0.42, "personFrames": 0, "ballFrames": 0},
+        "ball": {"launchDirection": "unknown"},
+        "swing_plane": {"label": "inside-out", "confidence": 0.45, "source": "hybrid"},
+        "body_metrics": {},
+        "fusion_metrics": {},
+    },
 }
 
 

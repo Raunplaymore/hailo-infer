@@ -21,6 +21,12 @@ def assert_not_contains(comments: list[str], text: str) -> None:
         raise AssertionError(f"unexpected text {text!r} in comments: {comments}")
 
 
+def assert_no_unverified_ball_flight_claims(comments: list[str]) -> None:
+    forbidden = ["슬라이스/풀성 구질", "푸시/훅성 구질"]
+    for text in forbidden:
+        assert_not_contains(comments, text)
+
+
 def keys(debug: list[dict[str, object]]) -> list[object]:
     return [item["key"] for item in debug]
 
@@ -30,6 +36,16 @@ def finding(debug: list[dict[str, object]], key: str) -> dict[str, object]:
         if item.get("key") == key:
             return item
     raise AssertionError(f"missing finding {key!r} in debug: {debug}")
+
+
+def assert_single_primary_pattern(debug: list[dict[str, object]]) -> None:
+    primary_patterns = [
+        item
+        for item in debug
+        if item.get("category") == "pattern" and item.get("priority") == "1순위 패턴"
+    ]
+    if len(primary_patterns) > 1:
+        raise AssertionError(f"summary must not show multiple primary patterns: {primary_patterns}")
 
 
 def run_fast_low_confidence_case() -> None:
@@ -91,6 +107,7 @@ def run_fast_low_confidence_case() -> None:
     assert debug[1]["key"] == "impact_unstable"
     assert debug[1]["confidence"] <= 0.3
     assert "release_late_proxy" not in keys(display_debug)
+    assert_single_primary_pattern(display_debug)
     assert "tempo_fast" in keys(debug)
     assert "shaft_flat" in keys(debug)
     assert "ball_missing" in keys(debug)
@@ -112,8 +129,10 @@ def run_stable_neutral_case() -> None:
     assert_contains(comments, "템포는 3.07:1로 사용할 수 있는 범위")
     assert_contains(comments, "샤프트 각도는 2D 기준 중립 범위")
     assert_contains(comments, "클럽 경로가 inside-out")
+    assert_contains(comments, "공 출발 방향은 확정하지 않고")
     assert_contains(comments, "임팩트 주변 클럽 위치는 비교적 안정적")
     assert_not_contains(comments, "추적 품질이 낮습니다")
+    assert_no_unverified_ball_flight_claims(comments)
 
 
 def run_short_steep_case() -> None:
@@ -144,6 +163,7 @@ def run_short_steep_case() -> None:
     assert_not_contains(comments, "백스윙 크기가 작게 잡힙니다")
     assert_not_contains(comments, "다운스윙 샤프트가 세워지는 편")
     assert_not_contains(comments, "클럽 경로가 outside-in")
+    assert_no_unverified_ball_flight_claims(comments)
     assert debug[0]["key"] == "pattern_over_the_top"
     assert debug[0]["priority"] == "1순위 패턴"
     assert "오버더탑 패턴" in str(debug[0]["theory"])
@@ -152,6 +172,55 @@ def run_short_steep_case() -> None:
     assert "pattern_rushed_short_swing" in keys(debug)
     assert "shaft_steep" in keys(debug)
     assert "path_outside_in" in keys(debug)
+
+
+def run_stuck_inside_release_case() -> None:
+    comments = build_coach_comments(
+        {"backswingMs": 435, "downswingMs": 134, "ratio": 3.25},
+        {"label": "flat", "confidence": 0.45, "angleDeg": 30.1, "source": "club_box_proxy"},
+        {"label": "adequate", "score": 0.97, "clubTravelRatio": 0.41, "source": "club_motion"},
+        {"label": "unstable", "score": 0.22},
+        {"label": "unknown"},
+        {"label": "fair", "score": 0.42, "personFrames": 0, "ballFrames": 0},
+        {"launchDirection": "unknown"},
+        {"label": "inside-out", "confidence": 0.45, "source": "hybrid"},
+    )
+    debug = build_coach_finding_debug(
+        {"backswingMs": 435, "downswingMs": 134, "ratio": 3.25},
+        {"label": "flat", "confidence": 0.45, "angleDeg": 30.1, "source": "club_box_proxy"},
+        {"label": "adequate", "score": 0.97, "clubTravelRatio": 0.41, "source": "club_motion"},
+        {"label": "unstable", "score": 0.22},
+        {"label": "unknown"},
+        {"label": "fair", "score": 0.42, "personFrames": 0, "ballFrames": 0},
+        {"launchDirection": "unknown"},
+        {"label": "inside-out", "confidence": 0.45, "source": "hybrid"},
+    )
+
+    assert_contains(comments, "낮은 샤프트, inside-out 경로, 임팩트 불안정")
+    assert_contains(comments, "오른쪽 허벅지 앞 공간")
+    assert_not_contains(comments, "다운스윙 샤프트가 낮고 뒤에 남는 편")
+    assert_not_contains(comments, "클럽 경로가 inside-out")
+    assert_no_unverified_ball_flight_claims(comments)
+    assert debug[0]["key"] == "pattern_stuck_inside_release"
+    assert debug[0]["priority"] == "1순위 패턴"
+    assert "인사이드-스턱 릴리스 패턴" in str(debug[0]["theory"])
+    assert "허리 높이 펌프 드릴" in str(debug[0]["drill"])
+    assert "몸 앞 공간" in str(debug[0]["checkpoint"])
+
+    fast_debug = build_coach_finding_debug(
+        {"backswingMs": 352, "downswingMs": 175, "ratio": 2.01},
+        {"label": "flat", "confidence": 0.45, "angleDeg": 30.1, "source": "club_box_proxy"},
+        {"label": "adequate", "score": 0.7, "clubTravelRatio": 0.3, "source": "club_motion"},
+        {"label": "unstable", "score": 0.2},
+        {"label": "unknown"},
+        {"label": "fair", "score": 0.52, "personFrames": 10, "ballFrames": 0},
+        {"launchDirection": "unknown"},
+        {"label": "inside-out", "confidence": 0.45, "source": "hybrid"},
+        suppress_redundant=True,
+    )
+    assert fast_debug[0]["key"] == "pattern_stuck_inside_release"
+    assert "pattern_late_club_release" not in keys(fast_debug)
+    assert_single_primary_pattern(fast_debug)
 
 
 def run_body_pose_case() -> None:
@@ -261,10 +330,39 @@ def run_fusion_sequence_cases() -> None:
     assert_contains(cast_comments, "공/페이스 데이터가 없는 tempo-shaft-impact proxy")
 
 
+def run_summary_priority_invariants() -> None:
+    cases = [
+        (
+            {"backswingMs": 120, "downswingMs": 120, "ratio": 1.0},
+            {"label": "steep", "confidence": 0.62, "angleDeg": 66.0, "source": "head_handle"},
+            {"label": "short", "score": 0.2, "clubTravelRatio": 0.04, "source": "club_motion"},
+            {"label": "unstable", "score": 0.35},
+            {"label": "ready"},
+            {"label": "fair", "score": 0.4, "personFrames": 12, "ballFrames": 2},
+            {"launchDirection": "right"},
+            {"label": "outside-in", "confidence": 0.5, "source": "hybrid"},
+        ),
+        (
+            {"backswingMs": 352, "downswingMs": 175, "ratio": 2.01},
+            {"label": "flat", "confidence": 0.45, "angleDeg": 30.1, "source": "club_box_proxy"},
+            {"label": "adequate", "score": 0.7, "clubTravelRatio": 0.3, "source": "club_motion"},
+            {"label": "unstable", "score": 0.2},
+            {"label": "unknown"},
+            {"label": "fair", "score": 0.52, "personFrames": 10, "ballFrames": 0},
+            {"launchDirection": "unknown"},
+            {"label": "inside-out", "confidence": 0.45, "source": "hybrid"},
+        ),
+    ]
+    for case in cases:
+        assert_single_primary_pattern(build_coach_finding_debug(*case, suppress_redundant=True))
+
+
 if __name__ == "__main__":
     run_fast_low_confidence_case()
     run_stable_neutral_case()
     run_short_steep_case()
+    run_stuck_inside_release_case()
     run_body_pose_case()
     run_fusion_sequence_cases()
+    run_summary_priority_invariants()
     print("coach commentary checks passed")

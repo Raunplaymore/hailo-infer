@@ -68,6 +68,7 @@ CATEGORY_ORDER = {
 
 THEORY_BY_KEY = {
     "pattern_late_club_release": "전환-릴리스 패턴: 빠른 전환, 낮은 샤프트, 임팩트 불안정의 조합을 우선 교정합니다.",
+    "pattern_stuck_inside_release": "인사이드-스턱 릴리스 패턴: 낮은 샤프트와 inside-out 경로, 임팩트 흔들림이 같이 보일 때 클럽이 몸 뒤에 남는 보상을 봅니다.",
     "pattern_over_the_top": "오버더탑 패턴: 전환 초반 손/상체 선행과 steep shaft, outside-in 경로 조합을 봅니다.",
     "pattern_rushed_short_swing": "리듬-회전 여유 패턴: 작은 백스윙과 빠른 전환이 손 위주 보상을 만들 수 있습니다.",
     "release_late_proxy": "릴리스 타이밍 proxy: 샤프트 플레인과 임팩트 안정성으로 클럽이 몸 뒤에 남는 신호를 봅니다.",
@@ -326,7 +327,7 @@ def _swing_plane_finding(swing_plane: Dict[str, object]) -> Optional[CoachFindin
             severity="medium",
             confidence=confidence,
             evidence="클럽 경로가 outside-in 쪽으로 보입니다.",
-            interpretation="슬라이스/풀성 구질이 동반된다면 손과 클럽이 바깥에서 들어오는 패턴일 수 있습니다.",
+            interpretation="공 출발 방향은 확정하지 않고, 손과 클럽이 바깥에서 들어오는 2D 경로 경향만 봅니다.",
             action="다운스윙 초반 손이 공 쪽으로 튀어나오는지 확인하세요.",
             priority="스윙 경로",
             drill="볼 뒤 안쪽에 헤드커버를 두고 하프스윙으로 안쪽 공간에서 내려오기.",
@@ -340,7 +341,7 @@ def _swing_plane_finding(swing_plane: Dict[str, object]) -> Optional[CoachFindin
             severity="medium",
             confidence=confidence,
             evidence="클럽 경로가 inside-out 쪽으로 보입니다.",
-            interpretation="푸시/훅성 구질이 동반된다면 클럽이 너무 뒤에서 늦게 나오는 패턴일 수 있습니다.",
+            interpretation="공 출발 방향은 확정하지 않고, 클럽이 너무 뒤에서 늦게 나오는 2D 경로 경향만 봅니다.",
             action="전환 이후 클럽이 몸 앞 공간으로 돌아오는지 확인하세요.",
             priority="스윙 경로",
             drill="허리 높이 펌프 동작에서 클럽헤드를 몸 앞에 둔 뒤 회전으로 임팩트.",
@@ -593,6 +594,7 @@ def _composite_findings(findings: List[CoachFinding]) -> List[CoachFinding]:
     if (
         "impact_unstable" in keys
         and "shaft_flat" in keys
+        and "path_inside_out" not in keys
         and ("tempo_fast" in keys or "tempo_rushed_transition" in keys)
     ):
         impact = _finding_by_key(findings, "impact_unstable")
@@ -612,6 +614,27 @@ def _composite_findings(findings: List[CoachFinding]) -> List[CoachFinding]:
                 drill="50% 속도 펌프 드릴: 탑-허리높이-탑-허리높이-임팩트 순서로 클럽을 몸 앞에 두고 치기.",
                 checkpoint="임팩트 직전 클럽헤드가 손 뒤에서 급히 따라오지 않고, 손과 클럽이 몸 앞에서 같이 지나가는지 봅니다.",
                 caution=_caution(min(shaft.confidence if shaft else 0.0, confidence), "club_box_proxy" if shaft and shaft.caution else ""),
+            )
+        )
+
+    if "impact_unstable" in keys and "shaft_flat" in keys and "path_inside_out" in keys:
+        impact = _finding_by_key(findings, "impact_unstable")
+        shaft = _finding_by_key(findings, "shaft_flat")
+        path = _finding_by_key(findings, "path_inside_out")
+        confidence = min(0.82, max(0.38, ((impact.confidence if impact else 0.4) + (shaft.confidence if shaft else 0.3) + (path.confidence if path else 0.4)) / 3.0))
+        composites.append(
+            CoachFinding(
+                key="pattern_stuck_inside_release",
+                category="pattern",
+                severity="high",
+                confidence=confidence,
+                evidence="낮은 샤프트, inside-out 경로, 임팩트 불안정이 함께 나타납니다.",
+                interpretation="클럽이 몸 뒤에 남아 안쪽에서 늦게 들어오면 임팩트 직전 손목 보상과 방향 편차가 커질 수 있습니다.",
+                action="클럽을 더 안쪽으로 내리려 하지 말고, 전환 이후 그립과 클럽헤드가 오른쪽 허벅지 앞 공간을 지나가게 만드세요.",
+                priority="1순위 패턴",
+                drill="허리 높이 펌프 드릴: 클럽헤드를 몸 뒤가 아니라 오른쪽 허벅지 앞에 둔 채 가슴 회전으로 임팩트까지 연결.",
+                checkpoint="다운스윙 중간 프레임에서 손과 클럽헤드가 몸 뒤에 숨어 있지 않고 몸 앞 공간에 보이는지 확인합니다.",
+                caution=_caution(min(shaft.confidence if shaft else 0.0, path.confidence if path else 0.0), "club_box_proxy" if shaft and shaft.caution else ""),
             )
         )
 
@@ -678,6 +701,8 @@ def _suppress_redundant_summary_findings(findings: List[CoachFinding]) -> List[C
     suppressed = set()
     if "pattern_late_club_release" in keys:
         suppressed.update({"tempo_fast", "tempo_rushed_transition", "shaft_flat", "release_late_proxy"})
+    if "pattern_stuck_inside_release" in keys:
+        suppressed.update({"shaft_flat", "path_inside_out", "release_late_proxy"})
     if "pattern_over_the_top" in keys:
         suppressed.update({"shaft_steep", "path_outside_in", "release_cast_proxy"})
     if "pattern_rushed_short_swing" in keys:
