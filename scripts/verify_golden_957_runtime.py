@@ -44,17 +44,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Verify golden 957 runtime artifacts.")
     parser.add_argument("--meta", type=Path, default=Path(artifacts["metaPath"]))
     parser.add_argument("--body", type=Path, default=Path(artifacts["bodyPath"]))
-    parser.add_argument("--analysis", type=Path, default=Path(artifacts["analysisPath"]))
     args = parser.parse_args()
 
     expected_hashes = artifacts["sha256"]
-    for key, path in (("meta", args.meta), ("body", args.body), ("analysis", args.analysis)):
+    for key, path in (("meta", args.meta), ("body", args.body)):
         require(path.is_file(), f"{key} artifact missing: {path}")
         require(sha256(path) == expected_hashes[key], f"{key} artifact does not match golden checksum: {path}")
 
     meta = load_json(args.meta)
     body = load_json(args.body)
-    stored_analysis = load_json(args.analysis)
     timeline = fixture["timeline"]
     labels = fixture["labels"]
     tolerance_ms = float(fixture["toleranceMs"])
@@ -68,13 +66,6 @@ def main() -> None:
         require(
             abs(float(normalized[int(frame_index)]) - float(labels[event_key])) <= tolerance_ms,
             f"{event_key} frame no longer aligns to the video clock",
-        )
-
-    stored_events = stored_analysis.get("debug", {}).get("bodySelectorEvents", {})
-    for event_key, expected_ms in labels.items():
-        require(
-            abs(float(stored_events.get(event_key, -1)) - float(expected_ms)) <= tolerance_ms,
-            f"stored pose selector event drifted: {event_key}",
         )
 
     result = analyze_meta(copy.deepcopy(meta), JOB_ID, True, str(args.body))

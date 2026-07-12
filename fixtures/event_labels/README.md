@@ -43,9 +43,11 @@ When the Pi artifacts are present, run the stronger end-to-end verifier:
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/verify_golden_957_runtime.py
 ```
 
-It checks the artifact checksums, restores the video frame clock from the
-missing-frame meta, confirms the stored pose event labels, and verifies that
-current false-positive club/ball detections are withheld from coaching.
+It checks the immutable input artifact checksums, restores the video frame
+clock from the missing-frame meta, verifies the labeled pose-event frames, and
+confirms that current false-positive club/ball detections are withheld from
+coaching. The analysis output is intentionally not checksummed because a
+successful reanalysis replaces it with the current engine version.
 
 The first target is not model accuracy. It is repeatable scoring so event logic changes can be
 compared against known failures before deployment.
