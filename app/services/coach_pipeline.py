@@ -191,9 +191,17 @@ def _frame_detections(frame: dict) -> List[dict]:
     return detections if isinstance(detections, list) else []
 
 
-def _normalize_times(frames: List[dict], fps: int) -> List[Optional[float]]:
+def _normalize_times(frames: List[dict], fps: int, duration_ms: Optional[float] = None) -> List[Optional[float]]:
+    """Return video-timeline milliseconds, preferring valid source frame numbers.
+
+    Hailo pipeline timestamps measure inference progress on some capture paths;
+    they are not necessarily video PTS.  Frame number/FPS is the shared clock
+    used by the pose pipeline, so it wins whenever it plausibly spans the
+    source video.
+    """
     times: List[Optional[float]] = []
     explicit_ms = False
+    frame_times: List[Optional[float]] = []
     for frame in frames:
         t = frame.get("t")
         if t is None:
@@ -205,6 +213,20 @@ def _normalize_times(frames: List[dict], fps: int) -> List[Optional[float]]:
         if t is None and "frame" in frame:
             t = _safe_float(frame["frame"]) / float(fps)
         times.append(None if t is None else _safe_float(t))
+        frame_index = frame.get("frame", frame.get("frameIndex"))
+        frame_number = _safe_float(frame_index, -1.0)
+        frame_times.append((frame_number * 1000.0 / float(fps)) if frame_number >= 0 else None)
+
+    valid_frame_times = [value for value in frame_times if value is not None]
+    if len(valid_frame_times) >= 2:
+        frame_span = max(valid_frame_times) - min(valid_frame_times)
+        expected_duration = _safe_float(duration_ms, 0.0)
+        frame_clock_fits_video = (
+            expected_duration <= 0
+            or max(valid_frame_times) <= expected_duration * 1.12 + 120.0
+        )
+        if frame_span > 0 and frame_clock_fits_video:
+            return frame_times
     if not times or all(t is None for t in times):
         return [None for _ in frames]
     max_t = max(t for t in times if t is not None)
@@ -1635,7 +1657,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     fps = max(1, _safe_int(meta.get("fps"), 60))
     width = _safe_float(meta.get("width"), 0.0) or None
     height = _safe_float(meta.get("height"), 0.0) or None
-    times_ms = _normalize_times(frames, fps)
+    times_ms = _normalize_times(frames, fps, _safe_float(meta.get("durationMs"), 0.0))
     for idx, frame in enumerate(frames):
         frame["_t_ms"] = times_ms[idx] if times_ms[idx] is not None else idx * (1000.0 / fps)
 

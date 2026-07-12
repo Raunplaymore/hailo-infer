@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from app.services.body_event_selector import (  # noqa: E402
 from app.services.swing_phase_decoder import MIN_PHASE_MS, decode_swing_phases  # noqa: E402
 from app.services.coach_pipeline import (  # noqa: E402
     _body_selector_is_operational,
+    _normalize_times,
     _validate_event_evidence,
 )
 
@@ -249,6 +251,35 @@ def test_event_validation_withholds_conflicting_or_missing_club_evidence() -> No
         raise AssertionError(f"consistent evidence must remain usable, got {usable}")
 
 
+def test_meta_timeline_prefers_video_frame_clock_over_inference_clock() -> None:
+    fixture_path = ROOT / "fixtures" / "event_labels" / "957e5457-4d13-46bf-88c6-65c467af8487.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    timeline = fixture["timeline"]
+    last_frame = int(timeline["lastFrame"])
+    raw_last_ms = float(timeline["rawInferenceLastTimeMs"])
+    frames = [
+        {"frame": frame_index, "timeMs": round(frame_index * raw_last_ms / last_frame)}
+        for frame_index in range(last_frame + 1)
+    ]
+    times = _normalize_times(frames, float(timeline["fps"]), float(timeline["durationMs"]))
+    expected_last_ms = float(timeline["expectedVideoLastTimeMs"])
+    if abs((times[-1] or 0) - expected_last_ms) > 2.0:
+        raise AssertionError(f"frame/FPS clock must repair this golden video's compressed inference timestamps, got {times[-1]}")
+
+    club_head_track = [
+        {"t": times[frame_index], "conf": 0.5}
+        for frame_index in timeline["clubHeadFrames"]
+    ]
+    evidence = _validate_event_evidence(
+        body_events=fixture["labels"],
+        wrist_top=None,
+        wrist_impact=None,
+        club_head_track=club_head_track,
+    )
+    if evidence.get("status") != "withheld" or "CLUB_TRACK_INSUFFICIENT_AT_IMPACT" not in evidence.get("codes", []):
+        raise AssertionError(f"golden fixture must retain the real club-head coverage limitation, got {evidence}")
+
+
 if __name__ == "__main__":
     test_state_machine_rejects_unrefined_early_top()
     test_state_machine_accepts_refined_compact_top()
@@ -259,4 +290,5 @@ if __name__ == "__main__":
     test_selector_uses_forward_decoder_for_complete_pose_club_roi_sequence()
     test_pipeline_only_uses_confident_forward_decoder()
     test_event_validation_withholds_conflicting_or_missing_club_evidence()
+    test_meta_timeline_prefers_video_frame_clock_over_inference_clock()
     print("body event selector checks passed")

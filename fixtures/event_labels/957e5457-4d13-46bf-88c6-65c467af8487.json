@@ -1,0 +1,25 @@
+{
+  "jobId": "957e5457-4d13-46bf-88c6-65c467af8487",
+  "viewpoint": "down_the_line",
+  "notes": "프로 스윙 골든 기준. 검출 메타의 추론 시간축과 pose의 영상 시간축이 어긋난 회귀 케이스.",
+  "toleranceMs": 80,
+  "labels": {
+    "addressMs": 1132,
+    "topMs": 2164,
+    "impactMs": 2431,
+    "finishMs": 2564
+  },
+  "timeline": {
+    "fps": 29.97002997002997,
+    "durationMs": 3197,
+    "lastFrame": 94,
+    "rawInferenceLastTimeMs": 954,
+    "expectedVideoLastTimeMs": 3136,
+    "clubHeadFrames": [33, 37, 41, 45, 49, 53, 57, 61, 66, 67, 68]
+  },
+  "artifacts": {
+    "metaPath": "/tmp/957e5457-4d13-46bf-88c6-65c467af8487.debug.meta.json",
+    "bodyPath": "/home/ray/data/body/957e5457-4d13-46bf-88c6-65c467af8487.json",
+    "analysisPath": "/home/ray/data/analysis/957e5457-4d13-46bf-88c6-65c467af8487.json"
+  }
+}
