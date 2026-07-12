@@ -1,0 +1,56 @@
+{
+  "jobId": "c04d1b58-026d-490f-939d-80c52ccc7781",
+  "source": "production debug result captured 2026-07-12",
+  "bodyEvents": {
+    "addressMs": 0,
+    "topMs": 1835,
+    "impactMs": 2369,
+    "finishMs": 2569
+  },
+  "bodySelectorConfidence": 0.699,
+  "legacyWristEvents": {
+    "top": { "t": 634 },
+    "impact": { "t": 801 }
+  },
+  "trackingCounts": {
+    "clubHeadRawFrames": 45,
+    "clubHeadAcceptedFrames": 16,
+    "clubHandleRawFrames": 55,
+    "clubHandleAcceptedFrames": 9,
+    "clubRawFrames": 56,
+    "clubAcceptedFrames": 55
+  },
+  "acceptedTracks": {
+    "head": [
+      { "t": 0, "frame": 0, "conf": 0.172 },
+      { "t": 434, "frame": 13, "conf": 0.169 },
+      { "t": 901, "frame": 27, "conf": 0.357 },
+      { "t": 2135.47, "frame": 64, "conf": 0.407 },
+      { "t": 2202.2, "frame": 66, "conf": 0.487 },
+      { "t": 2235.57, "frame": 67, "conf": 0.443 }
+    ],
+    "handle": [
+      { "t": 1335, "frame": 40, "conf": 0.306 },
+      { "t": 1568, "frame": 47, "conf": 0.742 },
+      { "t": 1602, "frame": 48, "conf": 0.304 },
+      { "t": 1635, "frame": 49, "conf": 0.267 },
+      { "t": 2102.1, "frame": 63, "conf": 0.353 },
+      { "t": 2202.2, "frame": 66, "conf": 0.185 },
+      { "t": 2502.5, "frame": 75, "conf": 0.236 }
+    ],
+    "club": [
+      { "t": 2168.83, "frame": 65, "conf": 0.223 },
+      { "t": 2335.67, "frame": 70, "conf": 0.481 },
+      { "t": 2402.4, "frame": 72, "conf": 0.624 },
+      { "t": 2435.77, "frame": 73, "conf": 0.473 },
+      { "t": 2469.13, "frame": 74, "conf": 0.452 }
+    ]
+  },
+  "expected": {
+    "status": "partial",
+    "code": "CLUB_IMPACT_REFERENCE_ONLY",
+    "warning": "POSE_EVENT_SOURCE_DIVERGENCE",
+    "impactQuality": "reference",
+    "tempoAvailability": "withheld"
+  }
+}

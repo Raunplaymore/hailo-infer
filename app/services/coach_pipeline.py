@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from app.services.body_event_selector import select_body_events
 from app.services.coach_commentary import build_coach_comments, build_coach_finding_debug
 
-COACH_ANALYSIS_VERSION = "hailo-coach-service7-v11"
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v12"
 
 SERVICE7_LABELS = {
     0: "person",
@@ -1227,9 +1227,18 @@ def _validate_event_evidence(
     wrist_impact: Optional[dict],
     club_head_track: List[dict],
     club_handle_track: Optional[List[dict]] = None,
+    club_track: Optional[List[dict]] = None,
+    body_selector_confidence: float = 0.0,
 ) -> Dict[str, Any]:
-    """Reject event timing when independent evidence cannot support it."""
+    """Grade event evidence without treating every weak club signal as total failure.
+
+    The forward body selector and the legacy wrist extrema are both pose-derived.
+    Their disagreement is diagnostic information, not independent proof that the
+    swing did not occur.  Club-head observations can confirm impact; accepted
+    handle/club observations may only support a reference impact.
+    """
     reasons: list[str] = []
+    warnings: list[str] = []
     if club_handle_track is not None and (len(club_head_track) < 4 or len(club_handle_track) < 4):
         reasons.append("CLUB_TRACK_INSUFFICIENT")
     top_ms = _safe_float(body_events.get("topMs"), -1.0)
@@ -1240,20 +1249,79 @@ def _validate_event_evidence(
             "codes": reasons,
             "message": "클럽 추적이 부족해 템포·임팩트·경로 코칭을 보류합니다. 클럽 head와 handle이 임팩트 전후에 연속 검출되도록 다시 촬영하세요." if reasons else None,
         }
+    body_events_usable = top_ms >= 0 and impact_ms >= 0 and body_selector_confidence >= 0.3
     if wrist_top and abs(top_ms - _safe_float(wrist_top.get("t"), top_ms)) > 350.0:
-        reasons.append("POSE_CLUB_EVENT_CONFLICT")
+        warnings.append("POSE_EVENT_SOURCE_DIVERGENCE")
     if wrist_impact and abs(impact_ms - _safe_float(wrist_impact.get("t"), impact_ms)) > 250.0:
-        reasons.append("POSE_CLUB_EVENT_CONFLICT")
+        warnings.append("POSE_EVENT_SOURCE_DIVERGENCE")
     near_impact = [
         point for point in club_head_track
         if abs(_safe_float(point.get("t"), -9999.0) - impact_ms) <= 150.0 and _safe_float(point.get("conf"), 0.0) >= 0.3
     ]
-    if len(near_impact) < 2:
-        reasons.append("CLUB_TRACK_INSUFFICIENT_AT_IMPACT")
+    confirmed_impact = len(near_impact) >= 2
+    reference_candidates = [
+        point
+        for point in [*club_head_track, *(club_handle_track or []), *(club_track or [])]
+        if abs(_safe_float(point.get("t"), -9999.0) - impact_ms) <= 200.0
+        and _safe_float(point.get("conf"), 0.0) >= 0.18
+    ]
+    reference_frames = {_safe_int(point.get("frame"), -1) for point in reference_candidates}
+    reference_impact = (
+        confirmed_impact
+        or (
+            len(reference_frames - {-1}) >= 2
+            and any(_safe_float(point.get("t"), impact_ms) <= impact_ms for point in reference_candidates)
+            and any(_safe_float(point.get("t"), impact_ms) >= impact_ms for point in reference_candidates)
+        )
+    )
+    if not confirmed_impact:
+        reasons.append("CLUB_IMPACT_REFERENCE_ONLY" if reference_impact else "CLUB_TRACK_INSUFFICIENT_AT_IMPACT")
+
+    if confirmed_impact and not reasons:
+        status = "usable"
+    elif body_events_usable and reference_impact:
+        status = "partial"
+    else:
+        status = "withheld"
+
+    pose_quality = "reference" if body_events_usable else "withheld"
+    impact_quality = "confirmed" if confirmed_impact else "reference" if reference_impact and body_events_usable else "withheld"
+    event_quality = {
+        "address": {"status": pose_quality, "confidence": round(_clamp(body_selector_confidence), 2), "source": "pose_phase_decoder"},
+        "top": {"status": pose_quality, "confidence": round(_clamp(body_selector_confidence), 2), "source": "pose_phase_decoder"},
+        "impact": {
+            "status": impact_quality,
+            "confidence": round(_clamp(0.75 if confirmed_impact else min(body_selector_confidence, 0.55) if reference_impact else 0.0), 2),
+            "source": "club_head" if confirmed_impact else "pose_club_bracket" if reference_impact else "none",
+        },
+        "finish": {"status": pose_quality, "confidence": round(_clamp(body_selector_confidence), 2), "source": "pose_phase_decoder"},
+    }
+    unique_reasons = list(dict.fromkeys(reasons))
+    unique_warnings = list(dict.fromkeys(warnings))
+    if status == "partial":
+        message = "포즈 기반 스윙 이벤트는 참고값으로 제공하지만, 임팩트 클럽 근거가 확정 수준이 아니어서 템포·임팩트·경로 코칭은 보류합니다."
+    elif status == "withheld":
+        message = "클럽 추적 또는 이벤트 근거가 부족해 템포·임팩트·경로 코칭을 보류합니다. 촬영 구도와 클럽이 화면에 유지되는지 확인하세요."
+    else:
+        message = None
     return {
-        "status": "withheld" if reasons else "usable",
-        "codes": reasons,
-        "message": "클럽 추적과 pose 이벤트가 일치하지 않아 템포·임팩트·경로 코칭을 보류합니다. 촬영 구도와 클럽이 화면에 유지되는지 확인한 뒤 다시 촬영하세요." if reasons else None,
+        "status": status,
+        "codes": unique_reasons,
+        "warnings": unique_warnings,
+        "message": message,
+        "eventQuality": event_quality,
+        "metricAvailability": {
+            "tempo": "confirmed" if status == "usable" else "withheld",
+            "impact": "confirmed" if confirmed_impact and status == "usable" else "withheld",
+            "path": "confirmed" if status == "usable" else "withheld",
+            "shaft": "confirmed" if status == "usable" else "withheld",
+        },
+        "impactEvidence": {
+            "status": impact_quality,
+            "confirmedHeadFrames": len({_safe_int(point.get("frame"), -1) for point in near_impact} - {-1}),
+            "referenceFrames": len(reference_frames - {-1}),
+            "windowMs": 200,
+        },
     }
 
 
@@ -1818,6 +1886,8 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         wrist_impact=wrist_impact,
         club_head_track=club_head_track,
         club_handle_track=handle_track,
+        club_track=club_track,
+        body_selector_confidence=_safe_float(body_selector.get("confidence"), 0.0) if use_body_selector else 0.0,
     )
     if impact_idx is None and EVENT_FALLBACK_ENABLED:
         impact_idx = _argmax(speeds) if speeds else None
@@ -1902,7 +1972,27 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         "clubHandleRejectedFrames": max(0, len(raw_handle_track) - len(handle_track)),
         "clubRejectedFrames": max(0, len(raw_club_track) - len(club_track)),
         "ballRejectedFrames": max(0, len(raw_ball_track) - len(ball_track)),
-        "clubFilter": "pose_wrist_geometry_v1",
+        "clubFilter": "pose_wrist_geometry_v2",
+        "observationTiers": {
+            "clubHead": {
+                "status": "confirmed" if len(club_head_track) >= 4 else "reference" if club_head_track else "rejected" if raw_club_head_track else "absent",
+                "confirmedFrames": len(club_head_track),
+                "rejectedFrames": max(0, len(raw_club_head_track) - len(club_head_track)),
+                "retentionRatio": round(len(club_head_track) / max(1, len(raw_club_head_track)), 3),
+            },
+            "clubHandle": {
+                "status": "confirmed" if len(handle_track) >= 4 else "reference" if handle_track else "rejected" if raw_handle_track else "absent",
+                "confirmedFrames": len(handle_track),
+                "rejectedFrames": max(0, len(raw_handle_track) - len(handle_track)),
+                "retentionRatio": round(len(handle_track) / max(1, len(raw_handle_track)), 3),
+            },
+            "clubBox": {
+                "status": "reference" if club_track else "rejected" if raw_club_track else "absent",
+                "referenceFrames": len(club_track),
+                "rejectedFrames": max(0, len(raw_club_track) - len(club_track)),
+                "retentionRatio": round(len(club_track) / max(1, len(raw_club_track)), 3),
+            },
+        },
     })
     ball = _ball_metric(ball_track, impact_ms, width, height)
     body_metrics = _body_pose_metrics(body_artifact, address_ms, top_ms, impact_ms)
@@ -1943,7 +2033,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         fusion_metrics,
         suppress_redundant=True,
     )
-    if event_validation["status"] == "withheld":
+    if event_validation["status"] != "usable":
         tempo = {"backswingMs": None, "downswingMs": None, "ratio": None, "status": "withheld"}
         swing_plane = {"label": "withheld", "confidence": 0.0, "source": "event_validation"}
         impact_stability = {"label": "withheld", "score": 0.0}
@@ -1951,14 +2041,25 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         backswing = {"label": "withheld", "score": 0.0, "source": "event_validation"}
         ball = {"launchDirection": "unknown", "launchAngle": None, "speedRelative": "unknown", "confidence": 0.0}
         fusion_metrics = {"eventSegmentation": event_validation}
-        coach_findings = [{
+        quality_finding = {
             "key": "event_segmentation_unreliable", "category": "quality", "severity": "high", "confidence": 1.0,
-            "priority": "분석 보류", "evidence": "스윙 이벤트를 신뢰성 있게 판정하지 못했습니다.",
+            "priority": "이벤트 참고" if event_validation["status"] == "partial" else "분석 보류",
+            "evidence": "스윙 이벤트는 포즈 참고값으로만 확보됐고 클럽 기반 확정 근거가 부족합니다.",
             "interpretation": event_validation["message"], "action": "클럽 전체가 address부터 finish까지 화면에 보이도록 다시 촬영하세요.",
             "drill": None, "checkpoint": "임팩트 전후에 club head와 handle 검출이 연속되는지 확인합니다.",
             "caution": "템포·임팩트·경로 기반 코칭은 제공하지 않습니다.", "theory": "분석 품질: 이벤트 근거가 충돌하면 이벤트 기반 코칭을 보류합니다.",
-        }]
-        coach_summary = ["[분석 보류] 스윙 이벤트 근거가 충돌하거나 임팩트 구간의 클럽 추적이 부족합니다. 템포·임팩트·경로 코칭은 제공하지 않습니다."]
+        }
+        safe_findings = [
+            finding for finding in coach_findings
+            if finding.get("category") in {"body", "quality"}
+            and finding.get("key") != "event_segmentation_unreliable"
+        ]
+        coach_findings = [quality_finding, *safe_findings]
+        coach_summary = [
+            "[이벤트 참고] 포즈 기반 이벤트 시점은 참고용으로 제공하며 템포·임팩트·경로 코칭은 보류합니다."
+            if event_validation["status"] == "partial"
+            else "[분석 보류] 이벤트 근거가 부족해 템포·임팩트·경로 코칭은 제공하지 않습니다."
+        ]
     coach_findings_debug = build_coach_finding_debug(
         tempo,
         shaft,
@@ -1972,8 +2073,21 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         fusion_metrics,
         limit=12,
     )
-    summary = f"service7 분석 완료: tempo {ratio}:1, shaft {shaft['label']}, backswing {backswing['label']}."
+    if event_validation["status"] == "usable":
+        summary = f"service7 분석 완료: tempo {ratio}:1, shaft {shaft['label']}, backswing {backswing['label']}."
+    elif event_validation["status"] == "partial":
+        summary = "포즈 기반 스윙 이벤트는 참고값으로 제공하며, 템포·임팩트·경로 수치는 클럽 추적 부족으로 보류했습니다."
+    else:
+        summary = "스윙 이벤트와 클럽 근거가 부족해 템포·임팩트·경로 분석을 보류했습니다."
     duration_ms = _safe_int(meta.get("durationMs"), 0) or (_safe_int(frames[-1].get("_t_ms"), 0) if frames else 0)
+
+    event_quality = event_validation.get("eventQuality") if isinstance(event_validation.get("eventQuality"), dict) else {}
+
+    def visible_event(event_key: str, value: int) -> Optional[int]:
+        if not event_quality:
+            return value if event_validation.get("status") == "usable" else None
+        quality = event_quality.get(event_key) if isinstance(event_quality.get(event_key), dict) else {}
+        return value if quality.get("status") in {"confirmed", "reference"} else None
 
     return {
         "ok": True,
@@ -1982,10 +2096,10 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         "errorCode": None,
         "errorMessage": None,
         "events": {
-            "addressMs": None if event_validation["status"] == "withheld" else address_ms,
-            "topMs": None if event_validation["status"] == "withheld" else top_ms,
-            "impactMs": None if event_validation["status"] == "withheld" else impact_ms,
-            "finishMs": None if event_validation["status"] == "withheld" else finish_ms,
+            "addressMs": visible_event("address", address_ms),
+            "topMs": visible_event("top", top_ms),
+            "impactMs": visible_event("impact", impact_ms),
+            "finishMs": visible_event("finish", finish_ms),
         },
         "metrics": {
             "swingPlane": swing_plane,
@@ -1999,10 +2113,10 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "body": body_metrics,
             "fusion": fusion_metrics,
             "eventTiming": {
-                "address": None if event_validation["status"] == "withheld" else address_ms,
-                "top": None if event_validation["status"] == "withheld" else top_ms,
-                "impact": None if event_validation["status"] == "withheld" else impact_ms,
-                "finish": None if event_validation["status"] == "withheld" else finish_ms,
+                "address": visible_event("address", address_ms),
+                "top": visible_event("top", top_ms),
+                "impact": visible_event("impact", impact_ms),
+                "finish": visible_event("finish", finish_ms),
             },
         },
         "summary": summary,

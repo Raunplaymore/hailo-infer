@@ -236,9 +236,11 @@ def test_event_validation_withholds_conflicting_or_missing_club_evidence() -> No
     )
     if conflict.get("status") != "withheld":
         raise AssertionError(f"conflicting sources must withhold event metrics, got {conflict}")
-    expected = {"POSE_CLUB_EVENT_CONFLICT", "CLUB_TRACK_INSUFFICIENT_AT_IMPACT"}
+    expected = {"CLUB_TRACK_INSUFFICIENT_AT_IMPACT"}
     if not expected.issubset(set(conflict.get("codes", []))):
         raise AssertionError(f"expected explicit failure codes, got {conflict}")
+    if conflict.get("warnings") != ["POSE_EVENT_SOURCE_DIVERGENCE"]:
+        raise AssertionError(f"pose-derived disagreement must be a deduplicated warning, got {conflict}")
 
     usable = _validate_event_evidence(
         body_events={"topMs": 500, "impactMs": 700},
@@ -252,6 +254,32 @@ def test_event_validation_withholds_conflicting_or_missing_club_evidence() -> No
     )
     if usable.get("status") != "usable":
         raise AssertionError(f"consistent evidence must remain usable, got {usable}")
+
+
+def test_production_reference_impact_fixture_is_partial_not_abandoned() -> None:
+    fixture_path = ROOT / "fixtures" / "event_validation" / "c04d1b58-026d-490f-939d-80c52ccc7781.json"
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    tracks = fixture["acceptedTracks"]
+    evidence = _validate_event_evidence(
+        body_events=fixture["bodyEvents"],
+        wrist_top=fixture["legacyWristEvents"]["top"],
+        wrist_impact=fixture["legacyWristEvents"]["impact"],
+        club_head_track=tracks["head"],
+        club_handle_track=tracks["handle"],
+        club_track=tracks["club"],
+        body_selector_confidence=fixture["bodySelectorConfidence"],
+    )
+    expected = fixture["expected"]
+    if evidence.get("status") != expected["status"]:
+        raise AssertionError(f"production fixture must retain reference events, got {evidence}")
+    if evidence.get("codes") != [expected["code"]]:
+        raise AssertionError(f"reference-only impact must have one stable reason code, got {evidence}")
+    if evidence.get("warnings") != [expected["warning"]]:
+        raise AssertionError(f"pose source divergence must be diagnostic only, got {evidence}")
+    if evidence.get("eventQuality", {}).get("impact", {}).get("status") != expected["impactQuality"]:
+        raise AssertionError(f"impact must be exposed as reference, got {evidence}")
+    if evidence.get("metricAvailability", {}).get("tempo") != expected["tempoAvailability"]:
+        raise AssertionError(f"reference impact must not unlock tempo, got {evidence}")
 
 
 def test_quality_withheld_result_is_still_complete() -> None:
@@ -353,6 +381,7 @@ if __name__ == "__main__":
     test_selector_uses_forward_decoder_for_complete_pose_club_roi_sequence()
     test_pipeline_only_uses_confident_forward_decoder()
     test_event_validation_withholds_conflicting_or_missing_club_evidence()
+    test_production_reference_impact_fixture_is_partial_not_abandoned()
     test_quality_withheld_result_is_still_complete()
     test_meta_timeline_prefers_video_frame_clock_over_inference_clock()
     test_wrist_gate_rejects_static_background_club_candidate()
