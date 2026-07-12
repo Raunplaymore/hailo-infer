@@ -18,7 +18,10 @@ from app.services.body_event_selector import (  # noqa: E402
     state_machine_score,
 )
 from app.services.swing_phase_decoder import MIN_PHASE_MS, decode_swing_phases  # noqa: E402
-from app.services.coach_pipeline import _body_selector_is_operational  # noqa: E402
+from app.services.coach_pipeline import (  # noqa: E402
+    _body_selector_is_operational,
+    _validate_event_evidence,
+)
 
 
 def test_state_machine_rejects_unrefined_early_top() -> None:
@@ -219,6 +222,33 @@ def test_pipeline_only_uses_confident_forward_decoder() -> None:
         raise AssertionError("weak forward decoder must not override club timing")
 
 
+def test_event_validation_withholds_conflicting_or_missing_club_evidence() -> None:
+    conflict = _validate_event_evidence(
+        body_events={"topMs": 2164, "impactMs": 2431},
+        wrist_top={"t": 533},
+        wrist_impact={"t": 699},
+        club_head_track=[],
+    )
+    if conflict.get("status") != "withheld":
+        raise AssertionError(f"conflicting sources must withhold event metrics, got {conflict}")
+    expected = {"POSE_CLUB_EVENT_CONFLICT", "CLUB_TRACK_INSUFFICIENT_AT_IMPACT"}
+    if not expected.issubset(set(conflict.get("codes", []))):
+        raise AssertionError(f"expected explicit failure codes, got {conflict}")
+
+    usable = _validate_event_evidence(
+        body_events={"topMs": 500, "impactMs": 700},
+        wrist_top={"t": 520},
+        wrist_impact={"t": 715},
+        club_head_track=[
+            {"t": 620, "x": 0.4, "y": 0.5, "conf": 0.8},
+            {"t": 690, "x": 0.5, "y": 0.5, "conf": 0.8},
+            {"t": 740, "x": 0.6, "y": 0.5, "conf": 0.8},
+        ],
+    )
+    if usable.get("status") != "usable":
+        raise AssertionError(f"consistent evidence must remain usable, got {usable}")
+
+
 if __name__ == "__main__":
     test_state_machine_rejects_unrefined_early_top()
     test_state_machine_accepts_refined_compact_top()
@@ -228,4 +258,5 @@ if __name__ == "__main__":
     test_confident_single_wrist_preserves_early_evidence()
     test_selector_uses_forward_decoder_for_complete_pose_club_roi_sequence()
     test_pipeline_only_uses_confident_forward_decoder()
+    test_event_validation_withholds_conflicting_or_missing_club_evidence()
     print("body event selector checks passed")
