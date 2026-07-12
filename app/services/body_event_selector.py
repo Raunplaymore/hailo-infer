@@ -1,14 +1,16 @@
-"""Pose-based body event selector for swing phase timing.
+"""Pose-led swing phase selection with club and ROI-motion evidence.
 
-This module is intentionally independent from club motion tracks. It returns
-event times from body pose features so callers can preserve pose timing instead
-of remapping to sparse club detections.
+Pose timing remains the primary coordinate system.  Club tracks and dynamic
+ROI flow are optional evidence sources, so sparse club detections do not force
+event times to be remapped away from the body sequence.
 """
 
 from __future__ import annotations
 
 import math
 from typing import Any, Dict, Optional
+
+from app.services.swing_phase_decoder import decode_swing_phases
 
 EVENT_KEYS = ("addressMs", "topMs", "impactMs", "finishMs")
 
@@ -583,7 +585,167 @@ def early_top_cluster_candidate(clusters: list[Dict[str, Any]]) -> tuple[Optiona
     }
 
 
-def select_body_events(body_payload: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _motion_value(frame: Dict[str, Any]) -> float:
+    """Read dynamic ROI motion from a body artifact without requiring it yet."""
+    raw = frame.get("roiMotion") or frame.get("roi_motion")
+    if not isinstance(raw, dict):
+        return 0.0
+    values: list[float] = []
+    for name in ("upper", "torso", "lower"):
+        value = raw.get(name)
+        if isinstance(value, dict):
+            values.append(_safe_float(value.get("magnitude"), 0.0))
+        else:
+            values.append(_safe_float(value, 0.0))
+    return sum(values) / len(values) if values else 0.0
+
+
+def _club_speed_at(times: list[float], club_track: Optional[list[Dict[str, Any]]]) -> list[float]:
+    if not club_track:
+        return [0.0 for _ in times]
+    ordered = sorted((point for point in club_track if isinstance(point, dict)), key=lambda point: _safe_float(point.get("t"), 0.0))
+    if len(ordered) < 2:
+        return [0.0 for _ in times]
+    club_speeds: list[tuple[float, float]] = []
+    for idx in range(1, len(ordered)):
+        before, after = ordered[idx - 1], ordered[idx]
+        dt = max(1.0, _safe_float(after.get("t"), 0.0) - _safe_float(before.get("t"), 0.0))
+        distance = math.hypot(
+            _safe_float(after.get("x"), 0.0) - _safe_float(before.get("x"), 0.0),
+            _safe_float(after.get("y"), 0.0) - _safe_float(before.get("y"), 0.0),
+        )
+        club_speeds.append((_safe_float(after.get("t"), 0.0), distance / dt))
+    return [
+        min(club_speeds, key=lambda item: abs(item[0] - time_ms))[1]
+        for time_ms in times
+    ]
+
+
+def _relative_activity(values: list[float]) -> list[float]:
+    """Normalise motion above its own quiet baseline, not above zero."""
+    if not values:
+        return []
+    ordered = sorted(values)
+    low = ordered[int((len(ordered) - 1) * 0.2)]
+    high = ordered[int((len(ordered) - 1) * 0.9)]
+    if high - low < 1e-7:
+        return [0.0 for _ in values]
+    return [max(0.0, min(1.0, (value - low) / (high - low))) for value in values]
+
+
+def phase_evidence_from_body(
+    body_payload: Optional[Dict[str, Any]], club_track: Optional[list[Dict[str, Any]]] = None
+) -> list[Dict[str, Any]]:
+    """Build phase evidence from pose-relative velocity, club, and ROI motion.
+
+    Missing sources simply contribute zero.  This keeps the decoder useful for
+    pose-only artifacts today while making ``roiMotion`` and club input first
+    class evidence as soon as their producers are available.
+    """
+    frames = body_payload.get("frames") if isinstance(body_payload, dict) else None
+    if not isinstance(frames, list):
+        return []
+    samples: list[Dict[str, Any]] = []
+    for index, frame in enumerate(frames):
+        if not isinstance(frame, dict):
+            continue
+        left = _keypoint_xyc(frame, "left_wrist")
+        right = _keypoint_xyc(frame, "right_wrist")
+        if not left and not right:
+            continue
+        if left and right:
+            wrist = _midpoint(left, right)
+        else:
+            wrist = left or right
+        if not wrist or wrist[2] < 0.15:
+            continue
+        samples.append(
+            {
+                "timeMs": _safe_float(frame.get("timeMs"), index * 33.333),
+                "x": wrist[0],
+                "y": wrist[1],
+                "roiMotion": _motion_value(frame),
+            }
+        )
+    if len(samples) < 7:
+        return []
+
+    pose_speeds = [0.0]
+    directions: list[tuple[float, float]] = [(0.0, 0.0)]
+    for index in range(1, len(samples)):
+        before, after = samples[index - 1], samples[index]
+        dt = max(1.0, _safe_float(after["timeMs"]) - _safe_float(before["timeMs"]))
+        dx = (_safe_float(after["x"]) - _safe_float(before["x"])) / dt
+        dy = (_safe_float(after["y"]) - _safe_float(before["y"])) / dt
+        pose_speeds.append(math.hypot(dx, dy))
+        directions.append((dx, dy))
+    club_speeds = _club_speed_at([_safe_float(sample["timeMs"]) for sample in samples], club_track)
+    pose_activity_values = _relative_activity(pose_speeds)
+    club_activity_values = _relative_activity(club_speeds)
+    roi_activity_values = _relative_activity([_safe_float(sample["roiMotion"]) for sample in samples])
+
+    evidence: list[Dict[str, Any]] = []
+    for index, sample in enumerate(samples):
+        pose_activity = pose_activity_values[index]
+        club_activity = club_activity_values[index]
+        roi_activity = roi_activity_values[index]
+        activity = max(pose_activity, club_activity * 0.9, roi_activity * 0.7)
+        reversal = 0.0
+        if 0 < index < len(directions) - 1:
+            previous = next(
+                (direction for direction in reversed(directions[:index]) if math.hypot(*direction) > 1e-7),
+                (0.0, 0.0),
+            )
+            following = next(
+                (direction for direction in directions[index + 1 :] if math.hypot(*direction) > 1e-7),
+                (0.0, 0.0),
+            )
+            previous_length = math.hypot(*previous)
+            following_length = math.hypot(*following)
+            if previous_length > 1e-7 and following_length > 1e-7:
+                reversal = max(0.0, -((previous[0] * following[0] + previous[1] * following[1]) / (previous_length * following_length)))
+        still = 1.0 - activity
+        evidence.append(
+            {
+                "timeMs": round(_safe_float(sample["timeMs"])),
+                "scores": {
+                    "ready": still,
+                    "backswing": activity * (1.0 - reversal * 0.35),
+                    "top": min(1.0, reversal * 0.85 + still * 0.25),
+                    "downswing": max(pose_activity, club_activity, roi_activity * 0.65),
+                    "impact_candidate": max(club_activity, pose_activity * 0.65),
+                    "follow_through": activity * (1.0 - reversal * 0.2),
+                    "finish": still,
+                },
+                "sources": {
+                    "pose": round(pose_activity, 3),
+                    "club": round(club_activity, 3),
+                    "roiMotion": round(roi_activity, 3),
+                    "directionReversal": round(reversal, 3),
+                },
+            }
+        )
+    return evidence
+
+
+def select_body_events(
+    body_payload: Optional[Dict[str, Any]], club_track: Optional[list[Dict[str, Any]]] = None
+) -> Dict[str, Any]:
+    phase_evidence = phase_evidence_from_body(body_payload, club_track)
+    decoded = decode_swing_phases(phase_evidence)
+    if decoded.get("available"):
+        return {
+            "available": True,
+            "method": "forward-phase-decoder",
+            "events": decoded["events"],
+            "confidence": decoded.get("confidence", 0.0),
+            "debug": {
+                **(decoded.get("debug") if isinstance(decoded.get("debug"), dict) else {}),
+                "phasePath": decoded.get("phasePath", []),
+                "evidenceSources": ["pose", "club", "roiMotion"],
+            },
+        }
+
     sequence_ranked = feature_sequence_ranked(body_payload)
     vote = feature_vote_events(body_payload)
     candidates: list[tuple[float, str, Dict[str, Any], Dict[str, Any]]] = []

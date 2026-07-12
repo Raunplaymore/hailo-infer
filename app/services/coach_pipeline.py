@@ -49,6 +49,11 @@ def _body_selector_is_operational(viewpoint: str, selector_result: Dict[str, Any
     viewpoint = viewpoint or "unknown"
     if not selector_result.get("available"):
         return False
+    if selector_result.get("method") == "forward-phase-decoder":
+        # The decoder is sequence-constrained and can work for either camera
+        # view.  Do not override sparse club timing unless its evidence path is
+        # strong enough to have traversed every swing phase.
+        return _safe_float(selector_result.get("confidence"), 0.0) >= 0.3
     # The offset fallback improved some weak cases but is not stable enough for
     # production event timing yet.
     if selector_result.get("method") == "feature-vote-offset-fallback":
@@ -325,6 +330,53 @@ def _choose_motion_track(club_head_track: List[dict], handle_track: List[dict], 
 
     source, track = max(candidates, key=rank)
     return track, source
+
+
+def _sample_overlay_points(points: List[dict], limit: int = 360) -> List[dict]:
+    if len(points) <= limit:
+        return points
+    stride = max(1, math.ceil(len(points) / limit))
+    return points[::stride]
+
+
+def _build_overlay_payload(
+    body_artifact: Optional[Dict[str, Any]], club_head_track: List[dict], handle_track: List[dict]
+) -> Dict[str, Any]:
+    """Expose compact, normalized timeline artifacts for the analysis player."""
+    raw_body_frames = body_artifact.get("frames") if isinstance(body_artifact, dict) else None
+    pose_frames = []
+    if isinstance(raw_body_frames, list):
+        for index, frame in enumerate(raw_body_frames):
+            if not isinstance(frame, dict) or not isinstance(frame.get("keypoints"), dict):
+                continue
+            pose_frames.append(
+                {
+                    "timeMs": round(_safe_float(frame.get("timeMs"), index * 33.333)),
+                    "frame": _safe_int(frame.get("frameIndex"), index),
+                    "keypoints": frame["keypoints"],
+                }
+            )
+    club_by_frame: Dict[int, Dict[str, Any]] = {}
+    for key, track in (("head", club_head_track), ("handle", handle_track)):
+        for point in track:
+            frame = _safe_int(point.get("frame"), -1)
+            if frame < 0:
+                continue
+            entry = club_by_frame.setdefault(
+                frame,
+                {"timeMs": round(_safe_float(point.get("t"), 0.0)), "frame": frame},
+            )
+            entry[key] = {
+                "x": round(_safe_float(point.get("x")), 6),
+                "y": round(_safe_float(point.get("y")), 6),
+                "confidence": round(_safe_float(point.get("conf")), 3),
+            }
+    club_frames = sorted(club_by_frame.values(), key=lambda point: (point["timeMs"], point["frame"]))
+    return {
+        "coordinateSpace": "normalized",
+        "poseFrames": _sample_overlay_points(pose_frames),
+        "clubFrames": _sample_overlay_points(club_frames),
+    }
 
 
 def _label_conf_stats(frames: List[dict], labels: Iterable[str]) -> Tuple[int, float]:
@@ -1569,10 +1621,10 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     body_artifact = _load_body_artifact(job_id, body_path)
     wrist_track = _wrist_track_from_body(body_artifact)
     viewpoint = _normalize_viewpoint(meta.get("viewpoint") or (body_artifact or {}).get("viewpoint"))
-    body_selector = select_body_events(body_artifact)
-    use_body_selector = _body_selector_is_operational(viewpoint, body_selector)
 
     motion_track, motion_source = _choose_motion_track(club_head_track, handle_track, club_track)
+    body_selector = select_body_events(body_artifact, motion_track)
+    use_body_selector = _body_selector_is_operational(viewpoint, body_selector)
 
     if len(motion_track) < min_points:
         if not force:
@@ -1682,6 +1734,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     for point in wrist_track:
         source_name = str(point.get("wristSource") or "unknown")
         wrist_sources[source_name] = wrist_sources.get(source_name, 0) + 1
+    overlay = _build_overlay_payload(body_artifact, club_head_track, handle_track)
 
     confidence = round(
         _clamp(
@@ -1693,6 +1746,11 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         ),
         2,
     )
+    decoder_confidence = _safe_float(body_selector.get("confidence"), 0.0) if use_body_selector else None
+    if decoder_confidence is not None:
+        # Event segmentation is a separate quality axis: a well-tracked club
+        # should not make an implausible phase path appear fully trustworthy.
+        confidence = round(_clamp(confidence * 0.8 + decoder_confidence * 0.2), 2)
 
     coach_summary = _coach_comments(tempo, shaft, backswing, impact_stability, readiness, tracking, ball, swing_plane, body_metrics, fusion_metrics)
     coach_findings = build_coach_finding_debug(
@@ -1758,6 +1816,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         "coachSummary": coach_summary,
         "coachFindings": coach_findings,
         "confidence": confidence,
+        "overlay": overlay,
         "analysisVersion": COACH_ANALYSIS_VERSION,
         "meta": {
             "fps": fps,
@@ -1774,6 +1833,8 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "viewpoint": viewpoint or "unknown",
             "bodySelectorMethod": body_selector.get("method") if body_selector.get("available") else None,
             "bodySelectorUsed": bool(use_body_selector),
+            "eventSegmentationConfidence": decoder_confidence,
+            "impactEventMeaning": "impact_candidate" if use_body_selector else "tracking_proxy",
             "bodySelectorEvents": body_selector_events if body_selector.get("available") else None,
             "bodySelectorDebug": body_selector.get("debug") if body_selector.get("available") else None,
             "wristPoints": float(len(wrist_track)),

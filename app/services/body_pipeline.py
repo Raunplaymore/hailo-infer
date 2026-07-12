@@ -150,6 +150,58 @@ def _extract_pose_keypoints(pose_detector, frame) -> Optional[Dict[str, List[flo
     return keypoints or None
 
 
+def _roi_bounds(
+    keypoints: Optional[Dict[str, List[float]]], names: Tuple[str, ...], margin: float
+) -> Optional[Tuple[float, float, float, float]]:
+    if not keypoints:
+        return None
+    points = [keypoints.get(name) for name in names]
+    valid = [point for point in points if isinstance(point, list) and len(point) >= 3 and float(point[2]) >= 0.15]
+    if len(valid) < 2:
+        return None
+    xs = [float(point[0]) for point in valid]
+    ys = [float(point[1]) for point in valid]
+    return (
+        max(0.0, min(xs) - margin),
+        max(0.0, min(ys) - margin),
+        min(1.0, max(xs) + margin),
+        min(1.0, max(ys) + margin),
+    )
+
+
+def _roi_flow_motion(previous_gray, gray, keypoints: Optional[Dict[str, List[float]]]) -> Dict[str, Dict[str, float]]:
+    """Compute pose-anchored Farneback flow summaries for the sampled frame."""
+    if previous_gray is None or previous_gray.shape != gray.shape:
+        return {}
+    flow = cv2.calcOpticalFlowFarneback(previous_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+    height, width = gray.shape[:2]
+    roi_specs = {
+        "upper": ("nose", "left_shoulder", "right_shoulder", "left_elbow", "right_elbow", "left_wrist", "right_wrist"),
+        "torso": ("left_shoulder", "right_shoulder", "left_hip", "right_hip"),
+        "lower": ("left_hip", "right_hip", "left_knee", "right_knee", "left_ankle", "right_ankle"),
+    }
+    result: Dict[str, Dict[str, float]] = {}
+    for name, points in roi_specs.items():
+        bounds = _roi_bounds(keypoints, points, 0.06)
+        if not bounds:
+            continue
+        x0, y0, x1, y1 = bounds
+        left, top = int(x0 * width), int(y0 * height)
+        right, bottom = max(left + 1, int(x1 * width)), max(top + 1, int(y1 * height))
+        roi = flow[top:bottom, left:right]
+        if roi.size == 0:
+            continue
+        mean_dx = float(roi[..., 0].mean()) / float(max(width, 1))
+        mean_dy = float(roi[..., 1].mean()) / float(max(height, 1))
+        magnitude = float(cv2.magnitude(roi[..., 0], roi[..., 1]).mean()) / float(max(width, height, 1))
+        result[name] = {
+            "magnitude": round(magnitude, 7),
+            "dx": round(mean_dx, 7),
+            "dy": round(mean_dy, 7),
+        }
+    return result
+
+
 def _scale_box(box: Tuple[int, int, int, int], scale: float) -> Tuple[int, int, int, int]:
     if scale <= 0 or scale == 1.0:
         return box
@@ -208,6 +260,7 @@ def analyze_body_video(
     best_conf = 0.0
     processed = 0
     frame_index = 0
+    previous_flow_gray = None
 
     try:
         while True:
@@ -228,6 +281,8 @@ def analyze_body_video(
                     wrist_frames += 1
             detection_frame, detection_scale = _resize_for_detection(frame)
             gray = cv2.cvtColor(detection_frame, cv2.COLOR_BGR2GRAY)
+            roi_motion = _roi_flow_motion(previous_flow_gray, gray, keypoints)
+            previous_flow_gray = gray
             rects, weights = detector.detectMultiScale(
                 gray,
                 winStride=(8, 8),
@@ -250,6 +305,7 @@ def analyze_body_video(
                             "confidence": round(float(confidence), 6),
                         },
                         "keypoints": keypoints,
+                        "roiMotion": roi_motion,
                     }
                 )
             else:
@@ -259,6 +315,7 @@ def analyze_body_video(
                         "timeMs": time_ms,
                         "personBox": None,
                         "keypoints": keypoints,
+                        "roiMotion": roi_motion,
                     }
                 )
             frame_index += 1
@@ -280,7 +337,7 @@ def analyze_body_video(
         "ok": True,
         "jobId": job_id,
         "status": "succeeded",
-        "analysisVersion": "body-bootstrap-v1",
+        "analysisVersion": "body-bootstrap-v2",
         "source": {
             "filename": filename,
             "inputPath": str(source),
@@ -296,6 +353,10 @@ def analyze_body_video(
             "detectMaxSide": BODY_DETECT_MAX_SIDE,
             "poseMaxSide": POSE_DETECT_MAX_SIDE,
             "poseAvailable": pose_detector is not None,
+            "roiMotion": {
+                "method": "farneback-pose-anchored-v1",
+                "regions": ["upper", "torso", "lower"],
+            },
         },
         "frames": sampled_frames,
         "metrics": {
