@@ -26,6 +26,7 @@ from app.services.coach_pipeline import (  # noqa: E402
     _normalize_times,
     _validate_event_evidence,
 )
+from app.services.result_completion import is_complete_coach_result  # noqa: E402
 
 
 def test_state_machine_rejects_unrefined_early_top() -> None:
@@ -253,6 +254,18 @@ def test_event_validation_withholds_conflicting_or_missing_club_evidence() -> No
         raise AssertionError(f"consistent evidence must remain usable, got {usable}")
 
 
+def test_quality_withheld_result_is_still_complete() -> None:
+    withheld = {
+        "ok": True,
+        "analysisVersion": "hailo-coach-service7-v11",
+        "events": {"addressMs": None, "topMs": None, "impactMs": None, "finishMs": None},
+        "metrics": {"trackingQuality": {"label": "weak"}},
+        "eventValidation": {"status": "withheld", "codes": ["CLUB_TRACK_INSUFFICIENT"]},
+    }
+    if not is_complete_coach_result(withheld, "hailo-coach-service7-v11"):
+        raise AssertionError("quality-withheld result must be visible as a completed analysis")
+
+
 def test_meta_timeline_prefers_video_frame_clock_over_inference_clock() -> None:
     fixture_path = ROOT / "fixtures" / "event_labels" / "957e5457-4d13-46bf-88c6-65c467af8487.json"
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
@@ -340,6 +353,7 @@ if __name__ == "__main__":
     test_selector_uses_forward_decoder_for_complete_pose_club_roi_sequence()
     test_pipeline_only_uses_confident_forward_decoder()
     test_event_validation_withholds_conflicting_or_missing_club_evidence()
+    test_quality_withheld_result_is_still_complete()
     test_meta_timeline_prefers_video_frame_clock_over_inference_clock()
     test_wrist_gate_rejects_static_background_club_candidate()
     print("body event selector checks passed")

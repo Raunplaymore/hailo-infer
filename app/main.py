@@ -13,6 +13,7 @@ from app.services.body_pipeline import BodyPipelineError, analyze_body_video
 from app.services.coach_pipeline import COACH_ANALYSIS_VERSION, CoachError, analyze_meta
 from app.services.job_store import JobStore
 from app.services.meta_loader import MetaLoadError, load_meta
+from app.services.result_completion import is_complete_coach_result
 
 APP_VERSION = "0.1.0"
 
@@ -22,29 +23,7 @@ app = FastAPI(title="hailo-infer", version=APP_VERSION)
 
 
 def _is_complete_coach_result(result: dict | None) -> bool:
-    if not isinstance(result, dict):
-        return False
-    if "analysis" in result or "progress" in result:
-        return False
-    if result.get("ok") is not True:
-        return False
-    result_version = result.get("analysisVersion")
-    meta = result.get("meta") if isinstance(result.get("meta"), dict) else {}
-    if result_version != COACH_ANALYSIS_VERSION and meta.get("analysisVersion") != COACH_ANALYSIS_VERSION:
-        return False
-    metrics = result.get("metrics")
-    events = result.get("events")
-    if not isinstance(metrics, dict) or not isinstance(events, dict):
-        return False
-    has_event = any(
-        events.get(key) is not None
-        for key in ("addressMs", "topMs", "impactMs", "finishMs", "address", "top", "impact", "finish")
-    )
-    has_metric = any(
-        metrics.get(key) is not None
-        for key in ("tempo", "swingPlane", "impactStability", "shaftPlane", "backswing", "trackingQuality")
-    )
-    return has_event and has_metric
+    return is_complete_coach_result(result, COACH_ANALYSIS_VERSION)
 
 
 def _run_job(job_id: str, payload: JobCreateRequest) -> None:
