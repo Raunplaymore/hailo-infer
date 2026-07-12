@@ -23,6 +23,7 @@ from app.services.coach_pipeline import (  # noqa: E402
     _body_selector_is_operational,
     _filter_track_by_bbox,
     _filter_track_by_wrist,
+    _impact_stability,
     _normalize_times,
     _validate_event_evidence,
 )
@@ -371,6 +372,17 @@ def test_wrist_gate_rejects_static_background_club_candidate() -> None:
         raise AssertionError("person-sized ball box must not become a ball track")
 
 
+def test_point_only_impact_stability_does_not_fail_fusion() -> None:
+    point_track = [
+        {"t": 0, "x": 0.50, "y": 0.50, "conf": 0.9},
+        {"t": 33, "x": 0.51, "y": 0.49, "conf": 0.9},
+        {"t": 66, "x": 0.52, "y": 0.50, "conf": 0.9},
+    ]
+    label, score = _impact_stability(point_track, 1)
+    if label != "unstable" or score != 0.0:
+        raise AssertionError(f"point-only impact stability must remain conservative, got {(label, score)}")
+
+
 if __name__ == "__main__":
     test_state_machine_rejects_unrefined_early_top()
     test_state_machine_accepts_refined_compact_top()
@@ -385,4 +397,5 @@ if __name__ == "__main__":
     test_quality_withheld_result_is_still_complete()
     test_meta_timeline_prefers_video_frame_clock_over_inference_clock()
     test_wrist_gate_rejects_static_background_club_candidate()
+    test_point_only_impact_stability_does_not_fail_fusion()
     print("body event selector checks passed")

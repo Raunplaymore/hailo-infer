@@ -1334,8 +1334,18 @@ def _impact_stability(track: List[dict], impact_idx: int) -> Tuple[str, float]:
     xs = [p["x"] for p in window]
     ys = [p["y"] for p in window]
     deviation = math.hypot(_std(xs), _std(ys))
-    sizes = [(p["w"] + p["h"]) / 2.0 for p in window]
-    scale = _mean(sizes) if sizes else 1.0
+    sizes = [
+        (_safe_float(point.get("w")) + _safe_float(point.get("h"))) / 2.0
+        for point in window
+        if _safe_float(point.get("w")) > 0 and _safe_float(point.get("h")) > 0
+    ]
+    # Pose wrist and other point-only fallback tracks do not carry a detection
+    # bbox.  A missing scale is not evidence of a stable impact, so keep the
+    # observation conservative instead of raising KeyError("w") and failing the
+    # entire fusion job.
+    if not sizes:
+        return "unstable", 0.0
+    scale = _mean(sizes)
     score = _clamp(1.0 - deviation / (scale + 1e-6))
     label = "stable" if score >= 0.6 else "unstable"
     return label, round(score, 2)
