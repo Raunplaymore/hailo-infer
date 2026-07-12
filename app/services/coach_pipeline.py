@@ -7,7 +7,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from app.services.body_event_selector import select_body_events
 from app.services.coach_commentary import build_coach_comments, build_coach_finding_debug
 
-COACH_ANALYSIS_VERSION = "hailo-coach-service7-v10"
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v11"
 
 SERVICE7_LABELS = {
     0: "person",
@@ -32,6 +32,21 @@ WRIST_PERSON_HEIGHT_NORM = 0.72
 WRIST_MIN_EVENT_TRAVEL_RATIO = 0.08
 WRIST_MIN_EVENT_RISE_RATIO = 0.035
 EVENT_FALLBACK_ENABLED = False
+CLUB_HEAD_MAX_WRIST_DISTANCE = 0.32
+CLUB_HANDLE_MAX_WRIST_DISTANCE = 0.22
+CLUB_BOX_MAX_WRIST_DISTANCE = 0.34
+CLUB_HEAD_MAX_AREA = 0.02
+CLUB_HANDLE_MAX_AREA = 0.06
+CLUB_BOX_MAX_AREA = 0.08
+CLUB_HEAD_MAX_WIDTH = 0.18
+CLUB_HEAD_MAX_HEIGHT = 0.18
+CLUB_HANDLE_MAX_WIDTH = 0.22
+CLUB_HANDLE_MAX_HEIGHT = 0.18
+CLUB_BOX_MAX_WIDTH = 0.28
+CLUB_BOX_MAX_HEIGHT = 0.22
+BALL_MAX_AREA = 0.012
+BALL_MAX_WIDTH = 0.14
+BALL_MAX_HEIGHT = 0.14
 
 
 class CoachError(Exception):
@@ -227,6 +242,14 @@ def _normalize_times(frames: List[dict], fps: int, duration_ms: Optional[float] 
         )
         if frame_span > 0 and frame_clock_fits_video:
             return frame_times
+    expected_duration = _safe_float(duration_ms, 0.0)
+    expected_frame_count = (expected_duration * float(fps) / 1000.0) if expected_duration > 0 else 0.0
+    frame_count_matches_video = expected_frame_count > 0 and abs((len(frames) - 1) - expected_frame_count) <= max(2.0, expected_frame_count * 0.08)
+    observed_times = [value for value in times if value is not None]
+    observed_span = (max(observed_times) - min(observed_times)) if len(observed_times) >= 2 else 0.0
+    compressed_inference_clock = expected_duration > 0 and observed_span > 0 and observed_span < expected_duration * 0.75
+    if not valid_frame_times and frame_count_matches_video and compressed_inference_clock:
+        return [(index * 1000.0) / float(fps) for index in range(len(frames))]
     if not times or all(t is None for t in times):
         return [None for _ in frames]
     max_t = max(t for t in times if t is not None)
@@ -268,6 +291,62 @@ def _select_best_track(frames: List[dict], labels: Iterable[str]) -> List[dict]:
             }
         )
     return track
+
+
+def _filter_track_by_wrist(
+    track: List[dict],
+    wrist_track: List[dict],
+    *,
+    max_distance: float,
+    max_area: float,
+    max_width: float,
+    max_height: float,
+) -> List[dict]:
+    """Discard club candidates that cannot be geometrically tied to the hands.
+
+    A per-frame detector can confidently lock on to a static background detail.
+    The grip/head must remain within a plausible shaft-length envelope from the
+    pose wrist and must not occupy an implausibly large part of the frame.
+    """
+    if not track or not wrist_track:
+        return []
+    accepted: List[dict] = []
+    for point in track:
+        frame = _safe_int(point.get("frame"), -1)
+        nearest = min(wrist_track, key=lambda wrist: abs(_safe_int(wrist.get("frame"), -9999) - frame))
+        if abs(_safe_int(nearest.get("frame"), -9999) - frame) > 2:
+            continue
+        width = _safe_float(point.get("w"))
+        height = _safe_float(point.get("h"))
+        area = width * height
+        distance = math.hypot(
+            _safe_float(point.get("x")) - _safe_float(nearest.get("x")),
+            _safe_float(point.get("y")) - _safe_float(nearest.get("y")),
+        )
+        if (
+            area > max_area
+            or width > max_width
+            or height > max_height
+            or distance > max_distance
+        ):
+            continue
+        accepted.append({**point, "wristDistance": round(distance, 4)})
+    return accepted
+
+
+def _filter_track_by_bbox(track: List[dict], *, max_area: float, max_width: float, max_height: float) -> List[dict]:
+    """Discard class predictions whose normalized box cannot represent the object."""
+    return [
+        point
+        for point in track
+        if (
+            _safe_float(point.get("w")) > 0
+            and _safe_float(point.get("h")) > 0
+            and _safe_float(point.get("w")) <= max_width
+            and _safe_float(point.get("h")) <= max_height
+            and _safe_float(point.get("w")) * _safe_float(point.get("h")) <= max_area
+        )
+    ]
 
 
 def _club_box_endpoint_track(club_track: List[dict]) -> List[dict]:
@@ -1142,14 +1221,25 @@ def _tempo(address_ms: int, top_ms: int, impact_ms: int) -> Tuple[int, int, floa
 
 
 def _validate_event_evidence(
-    *, body_events: Dict[str, Any], wrist_top: Optional[dict], wrist_impact: Optional[dict], club_head_track: List[dict]
+    *,
+    body_events: Dict[str, Any],
+    wrist_top: Optional[dict],
+    wrist_impact: Optional[dict],
+    club_head_track: List[dict],
+    club_handle_track: Optional[List[dict]] = None,
 ) -> Dict[str, Any]:
     """Reject event timing when independent evidence cannot support it."""
     reasons: list[str] = []
+    if club_handle_track is not None and (len(club_head_track) < 4 or len(club_handle_track) < 4):
+        reasons.append("CLUB_TRACK_INSUFFICIENT")
     top_ms = _safe_float(body_events.get("topMs"), -1.0)
     impact_ms = _safe_float(body_events.get("impactMs"), -1.0)
     if top_ms < 0 or impact_ms < 0:
-        return {"status": "usable", "codes": [], "message": None}
+        return {
+            "status": "withheld" if reasons else "usable",
+            "codes": reasons,
+            "message": "클럽 추적이 부족해 템포·임팩트·경로 코칭을 보류합니다. 클럽 head와 handle이 임팩트 전후에 연속 검출되도록 다시 촬영하세요." if reasons else None,
+        }
     if wrist_top and abs(top_ms - _safe_float(wrist_top.get("t"), top_ms)) > 350.0:
         reasons.append("POSE_CLUB_EVENT_CONFLICT")
     if wrist_impact and abs(impact_ms - _safe_float(wrist_impact.get("t"), impact_ms)) > 250.0:
@@ -1654,20 +1744,38 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
 
     min_points = 4
     min_conf = 0.12
-    fps = max(1, _safe_int(meta.get("fps"), 60))
+    fps = max(1.0, _safe_float(meta.get("fps"), 60.0))
     width = _safe_float(meta.get("width"), 0.0) or None
     height = _safe_float(meta.get("height"), 0.0) or None
     times_ms = _normalize_times(frames, fps, _safe_float(meta.get("durationMs"), 0.0))
     for idx, frame in enumerate(frames):
         frame["_t_ms"] = times_ms[idx] if times_ms[idx] is not None else idx * (1000.0 / fps)
 
-    club_head_track = _select_best_track(frames, CLUBHEAD_LABELS)
-    handle_track = _select_best_track(frames, HANDLE_LABELS)
-    club_track = _select_best_track(frames, CLUB_LABELS)
-    ball_track = _select_best_track(frames, BALL_LABELS)
+    raw_club_head_track = _select_best_track(frames, CLUBHEAD_LABELS)
+    raw_handle_track = _select_best_track(frames, HANDLE_LABELS)
+    raw_club_track = _select_best_track(frames, CLUB_LABELS)
+    raw_ball_track = _select_best_track(frames, BALL_LABELS)
+    ball_track = _filter_track_by_bbox(
+        raw_ball_track, max_area=BALL_MAX_AREA, max_width=BALL_MAX_WIDTH, max_height=BALL_MAX_HEIGHT,
+    )
     person_track = _select_best_track(frames, PERSON_LABELS)
     body_artifact = _load_body_artifact(job_id, body_path)
     wrist_track = _wrist_track_from_body(body_artifact)
+    club_head_track = _filter_track_by_wrist(
+        raw_club_head_track, wrist_track,
+        max_distance=CLUB_HEAD_MAX_WRIST_DISTANCE, max_area=CLUB_HEAD_MAX_AREA,
+        max_width=CLUB_HEAD_MAX_WIDTH, max_height=CLUB_HEAD_MAX_HEIGHT,
+    )
+    handle_track = _filter_track_by_wrist(
+        raw_handle_track, wrist_track,
+        max_distance=CLUB_HANDLE_MAX_WRIST_DISTANCE, max_area=CLUB_HANDLE_MAX_AREA,
+        max_width=CLUB_HANDLE_MAX_WIDTH, max_height=CLUB_HANDLE_MAX_HEIGHT,
+    )
+    club_track = _filter_track_by_wrist(
+        raw_club_track, wrist_track,
+        max_distance=CLUB_BOX_MAX_WRIST_DISTANCE, max_area=CLUB_BOX_MAX_AREA,
+        max_width=CLUB_BOX_MAX_WIDTH, max_height=CLUB_BOX_MAX_HEIGHT,
+    )
     viewpoint = _normalize_viewpoint(meta.get("viewpoint") or (body_artifact or {}).get("viewpoint"))
 
     motion_track, motion_source = _choose_motion_track(club_head_track, handle_track, club_track)
@@ -1675,7 +1783,10 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     use_body_selector = _body_selector_is_operational(viewpoint, body_selector)
 
     if len(motion_track) < min_points:
-        if not force:
+        if use_body_selector and len(wrist_track) >= min_points:
+            motion_track = wrist_track
+            motion_source = "pose_wrist"
+        elif not force:
             raise CoachError("NOT_SWING", f"insufficient service7 club detections (source={motion_source}, motionFrames={len(motion_track)}, clubHeadFrames={len(club_head_track)}, clubHandleFrames={len(handle_track)}, clubFrames={len(club_track)}, personFrames={len(person_track)})")
     confs = [p["conf"] for p in motion_track]
     if confs and _mean(confs) < min_conf and not force:
@@ -1706,6 +1817,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         wrist_top=wrist_top,
         wrist_impact=wrist_impact,
         club_head_track=club_head_track,
+        club_handle_track=handle_track,
     )
     if impact_idx is None and EVENT_FALLBACK_ENABLED:
         impact_idx = _argmax(speeds) if speeds else None
@@ -1781,6 +1893,17 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     )
     readiness = _readiness_metric(frames)
     tracking = _tracking_quality(frames, club_head_track, handle_track, club_track, ball_track, person_track)
+    tracking.update({
+        "clubHeadRawFrames": len(raw_club_head_track),
+        "clubHandleRawFrames": len(raw_handle_track),
+        "clubRawFrames": len(raw_club_track),
+        "ballRawFrames": len(raw_ball_track),
+        "clubHeadRejectedFrames": max(0, len(raw_club_head_track) - len(club_head_track)),
+        "clubHandleRejectedFrames": max(0, len(raw_handle_track) - len(handle_track)),
+        "clubRejectedFrames": max(0, len(raw_club_track) - len(club_track)),
+        "ballRejectedFrames": max(0, len(raw_ball_track) - len(ball_track)),
+        "clubFilter": "pose_wrist_geometry_v1",
+    })
     ball = _ball_metric(ball_track, impact_ms, width, height)
     body_metrics = _body_pose_metrics(body_artifact, address_ms, top_ms, impact_ms)
     fusion_metrics = _fusion_metrics(tempo, shaft, backswing, impact_stability, swing_plane, body_metrics, tracking)

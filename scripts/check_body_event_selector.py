@@ -21,6 +21,8 @@ from app.services.body_event_selector import (  # noqa: E402
 from app.services.swing_phase_decoder import MIN_PHASE_MS, decode_swing_phases  # noqa: E402
 from app.services.coach_pipeline import (  # noqa: E402
     _body_selector_is_operational,
+    _filter_track_by_bbox,
+    _filter_track_by_wrist,
     _normalize_times,
     _validate_event_evidence,
 )
@@ -258,13 +260,35 @@ def test_meta_timeline_prefers_video_frame_clock_over_inference_clock() -> None:
     last_frame = int(timeline["lastFrame"])
     raw_last_ms = float(timeline["rawInferenceLastTimeMs"])
     frames = [
-        {"frame": frame_index, "timeMs": round(frame_index * raw_last_ms / last_frame)}
+        {
+            "frame": None if timeline.get("frameFieldMissing") else frame_index,
+            "timeMs": round(frame_index * raw_last_ms / last_frame),
+        }
         for frame_index in range(last_frame + 1)
     ]
     times = _normalize_times(frames, float(timeline["fps"]), float(timeline["durationMs"]))
     expected_last_ms = float(timeline["expectedVideoLastTimeMs"])
     if abs((times[-1] or 0) - expected_last_ms) > 2.0:
         raise AssertionError(f"frame/FPS clock must repair this golden video's compressed inference timestamps, got {times[-1]}")
+
+    for event_key, frame_index in timeline["poseEventFrames"].items():
+        expected_ms = float(fixture["labels"][event_key])
+        actual_ms = times[int(frame_index)]
+        if actual_ms is None or abs(actual_ms - expected_ms) > float(fixture["toleranceMs"]):
+            raise AssertionError(
+                f"golden pose event {event_key} must remain on the video frame clock, expected {expected_ms}, got {actual_ms}"
+            )
+
+    last_club_frame = max(timeline["clubHeadFrames"])
+    impact_ms = float(fixture["labels"]["impactMs"])
+    club_impact_gap_ms = impact_ms - float(times[last_club_frame] or 0)
+    if club_impact_gap_ms < float(timeline["minimumClubImpactGapMs"]):
+        raise AssertionError(
+            f"golden club track must retain its post-impact gap, expected >= {timeline['minimumClubImpactGapMs']}, got {club_impact_gap_ms}"
+        )
+    raw_last_club_ms = round(last_club_frame * raw_last_ms / last_frame)
+    if abs(raw_last_club_ms - impact_ms) <= float(fixture["toleranceMs"]):
+        raise AssertionError("compressed inference clock must not make the sparse club track appear impact-aligned")
 
     club_head_track = [
         {"t": times[frame_index], "conf": 0.5}
@@ -280,6 +304,32 @@ def test_meta_timeline_prefers_video_frame_clock_over_inference_clock() -> None:
         raise AssertionError(f"golden fixture must retain the real club-head coverage limitation, got {evidence}")
 
 
+def test_wrist_gate_rejects_static_background_club_candidate() -> None:
+    wrists = [
+        {"frame": 33, "x": 0.544, "y": 0.590},
+        {"frame": 66, "x": 0.545, "y": 0.537},
+    ]
+    background = [{"frame": 33, "x": 0.783, "y": 0.219, "w": 0.04, "h": 0.032, "conf": 0.51}]
+    plausible = [{"frame": 66, "x": 0.632, "y": 0.267, "w": 0.04, "h": 0.03, "conf": 0.53}]
+    shaft_sized_handle = [{"frame": 66, "x": 0.52, "y": 0.54, "w": 0.285, "h": 0.21, "conf": 0.62}]
+    if _filter_track_by_wrist(
+        background, wrists, max_distance=0.32, max_area=0.02, max_width=0.18, max_height=0.18
+    ):
+        raise AssertionError("static background head must not become a club track")
+    if not _filter_track_by_wrist(
+        plausible, wrists, max_distance=0.32, max_area=0.02, max_width=0.18, max_height=0.18
+    ):
+        raise AssertionError("plausible moving head candidate should remain available")
+    if _filter_track_by_wrist(
+        shaft_sized_handle, wrists, max_distance=0.22, max_area=0.06, max_width=0.22, max_height=0.18
+    ):
+        raise AssertionError("shaft-sized handle box must not become a grip track")
+    if _filter_track_by_bbox(
+        [{"w": 0.43, "h": 0.46}], max_area=0.012, max_width=0.14, max_height=0.14
+    ):
+        raise AssertionError("person-sized ball box must not become a ball track")
+
+
 if __name__ == "__main__":
     test_state_machine_rejects_unrefined_early_top()
     test_state_machine_accepts_refined_compact_top()
@@ -291,4 +341,5 @@ if __name__ == "__main__":
     test_pipeline_only_uses_confident_forward_decoder()
     test_event_validation_withholds_conflicting_or_missing_club_evidence()
     test_meta_timeline_prefers_video_frame_clock_over_inference_clock()
+    test_wrist_gate_rejects_static_background_club_candidate()
     print("body event selector checks passed")

@@ -15,11 +15,24 @@
     "lastFrame": 94,
     "rawInferenceLastTimeMs": 954,
     "expectedVideoLastTimeMs": 3136,
-    "clubHeadFrames": [33, 37, 41, 45, 49, 53, 57, 61, 66, 67, 68]
+    "frameFieldMissing": true,
+    "clubHeadFrames": [33, 37, 41, 45, 49, 53, 57, 61, 66, 67, 68],
+    "poseEventFrames": {
+      "addressMs": 34,
+      "topMs": 65,
+      "impactMs": 73,
+      "finishMs": 77
+    },
+    "minimumClubImpactGapMs": 120
   },
   "artifacts": {
     "metaPath": "/tmp/957e5457-4d13-46bf-88c6-65c467af8487.debug.meta.json",
     "bodyPath": "/home/ray/data/body/957e5457-4d13-46bf-88c6-65c467af8487.json",
-    "analysisPath": "/home/ray/data/analysis/957e5457-4d13-46bf-88c6-65c467af8487.json"
+    "analysisPath": "/home/ray/data/analysis/957e5457-4d13-46bf-88c6-65c467af8487.json",
+    "sha256": {
+      "meta": "91331a070f7fbda42b05d5ac62cad4789e929f3595d1ea07e28c778e2e5d3458",
+      "body": "185f5eb2a0135998c8330a70b075dd9b944376273191cc0709517eb5ce03ac9d",
+      "analysis": "a4a969e5bce2634faba918621875497624b882fad1a0e9d93c71bb4c5a8863c9"
+    }
   }
 }

@@ -31,5 +31,21 @@ python3 scripts/replay_events.py --diagnostics fixtures/event_labels/<jobId>.jso
 python3 scripts/replay_events.py fixtures/event_labels/<jobId>.json
 ```
 
+`957e5457-4d13-46bf-88c6-65c467af8487` is also a self-contained regression
+for the video-frame clock. Run `python3 scripts/check_body_event_selector.py`
+to verify that its pose event frames remain aligned to the video timeline and
+that its sparse club track is not mistaken for impact evidence. Full replay
+still requires the saved Pi meta and body artifacts referenced by the fixture.
+
+When the Pi artifacts are present, run the stronger end-to-end verifier:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/verify_golden_957_runtime.py
+```
+
+It checks the artifact checksums, restores the video frame clock from the
+missing-frame meta, confirms the stored pose event labels, and verifies that
+current false-positive club/ball detections are withheld from coaching.
+
 The first target is not model accuracy. It is repeatable scoring so event logic changes can be
 compared against known failures before deployment.
