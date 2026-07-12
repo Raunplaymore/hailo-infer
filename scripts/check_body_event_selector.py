@@ -166,6 +166,22 @@ def test_pose_club_and_roi_motion_are_exposed_as_evidence() -> None:
         raise AssertionError(f"pose, club, and ROI motion must all contribute evidence, got {sources}")
 
 
+def test_confident_single_wrist_preserves_early_evidence() -> None:
+    frames = [
+        {
+            "timeMs": index * 33,
+            "keypoints": {
+                "left_wrist": [0.45, 0.60, 0.08],
+                "right_wrist": [0.55 + index * 0.01, 0.60, 0.91],
+            },
+        }
+        for index in range(7)
+    ]
+    evidence = phase_evidence_from_body({"frames": frames})
+    if not evidence or evidence[0]["timeMs"] != 0:
+        raise AssertionError(f"weak opposite wrist must not discard the address window, got {evidence}")
+
+
 def test_selector_uses_forward_decoder_for_complete_pose_club_roi_sequence() -> None:
     wrist_x = (0.30, 0.31, 0.35, 0.40, 0.47, 0.55, 0.55, 0.46, 0.34, 0.25, 0.19, 0.18, 0.18, 0.18, 0.18)
     club_x = (0.10, 0.11, 0.13, 0.16, 0.20, 0.25, 0.30, 0.38, 0.48, 0.54, 0.56, 0.565, 0.565, 0.565, 0.565)
@@ -209,6 +225,7 @@ if __name__ == "__main__":
     test_forward_decoder_enforces_phase_order_and_duration()
     test_forward_decoder_rejects_finish_before_swing()
     test_pose_club_and_roi_motion_are_exposed_as_evidence()
+    test_confident_single_wrist_preserves_early_evidence()
     test_selector_uses_forward_decoder_for_complete_pose_club_roi_sequence()
     test_pipeline_only_uses_confident_forward_decoder()
     print("body event selector checks passed")

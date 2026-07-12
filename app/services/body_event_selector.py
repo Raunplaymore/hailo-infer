@@ -653,10 +653,15 @@ def phase_evidence_from_body(
         right = _keypoint_xyc(frame, "right_wrist")
         if not left and not right:
             continue
-        if left and right:
+        # A partially occluded wrist must not erase a confident opposite hand.
+        # Using the midpoint confidence (the lower of the two confidences)
+        # previously dropped the entire address/early-backswing window when one
+        # wrist was hidden, causing the phase decoder to begin mid-swing.
+        if left and right and left[2] >= 0.15 and right[2] >= 0.15:
             wrist = _midpoint(left, right)
         else:
-            wrist = left or right
+            candidates = [point for point in (left, right) if point and point[2] >= 0.15]
+            wrist = max(candidates, key=lambda point: point[2]) if candidates else None
         if not wrist or wrist[2] < 0.15:
             continue
         samples.append(
