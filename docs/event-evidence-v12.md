@@ -90,3 +90,19 @@ person/ball/readiness classes should not be expanded as a workaround.
   club-dependent metric remain `withheld` when club evidence is absent.
 - rollout target: fully withheld rate below 40% on at least 20 representative swings, with zero
   confirmed event metrics from a reference-only impact.
+
+## Raspberry Pi runtime smoke — 2026-07-13
+
+After deploying commits `3005ce3` and `e834412`, six stored production jobs were force-replayed
+through the Pi `hailo-infer` service and read back through the job/result APIs.
+
+- terminal completion: 6/6 `done`; 0 fusion failures or stuck jobs
+- overall evidence state: 6/6 `partial`; 0/6 fully `withheld`
+- pose reference events: address/top/finish present in 6/6
+- impact evidence: 2/6 `reference`, 4/6 `withheld`, 0 incorrectly `confirmed`
+- metric safety: tempo/impact/path/shaft remained `withheld` in 6/6; 0 stale numeric summaries
+- regression job `c04d1b58-026d-490f-939d-80c52ccc7781`: 4/4 reference events restored with
+  head 16/45, handle 9/55, and club proxy 55/56 retained exactly as before the policy change
+
+This smoke set proves the minimum policy and runtime wiring, but it does not replace the 20-video
+labeled rollout gate above.
