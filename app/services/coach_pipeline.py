@@ -1279,7 +1279,11 @@ def _validate_event_evidence(
 
     if confirmed_impact and not reasons:
         status = "usable"
-    elif body_events_usable and reference_impact:
+    elif body_events_usable:
+        # A trustworthy pose phase path is still useful evidence for
+        # address/top/finish even when no club observation can bracket impact.
+        # Keep every club-dependent metric gated below, but do not describe the
+        # entire analysis as withheld while reference events are being exposed.
         status = "partial"
     else:
         status = "withheld"
@@ -1299,7 +1303,11 @@ def _validate_event_evidence(
     unique_reasons = list(dict.fromkeys(reasons))
     unique_warnings = list(dict.fromkeys(warnings))
     if status == "partial":
-        message = "포즈 기반 스윙 이벤트는 참고값으로 제공하지만, 임팩트 클럽 근거가 확정 수준이 아니어서 템포·임팩트·경로 코칭은 보류합니다."
+        message = (
+            "포즈 기반 스윙 이벤트는 참고값으로 제공하지만, 임팩트 클럽 근거가 확정 수준이 아니어서 템포·임팩트·경로 코칭은 보류합니다."
+            if reference_impact
+            else "포즈 기반 address·top·finish는 참고값으로 제공하지만, 임팩트 클럽 근거가 없어 템포·임팩트·경로 코칭은 보류합니다."
+        )
     elif status == "withheld":
         message = "클럽 추적 또는 이벤트 근거가 부족해 템포·임팩트·경로 코칭을 보류합니다. 촬영 구도와 클럽이 화면에 유지되는지 확인하세요."
     else:

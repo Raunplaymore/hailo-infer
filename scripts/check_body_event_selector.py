@@ -283,6 +283,28 @@ def test_production_reference_impact_fixture_is_partial_not_abandoned() -> None:
         raise AssertionError(f"reference impact must not unlock tempo, got {evidence}")
 
 
+def test_pose_events_remain_partial_when_impact_is_withheld() -> None:
+    evidence = _validate_event_evidence(
+        body_events={"addressMs": 0, "topMs": 900, "impactMs": 1200, "finishMs": 1700},
+        wrist_top={"t": 910},
+        wrist_impact={"t": 1210},
+        club_head_track=[],
+        club_handle_track=[],
+        club_track=[],
+        body_selector_confidence=0.82,
+    )
+    if evidence.get("status") != "partial":
+        raise AssertionError(f"usable pose events must not become a fully withheld analysis, got {evidence}")
+    event_quality = evidence.get("eventQuality", {})
+    for event_key in ("address", "top", "finish"):
+        if event_quality.get(event_key, {}).get("status") != "reference":
+            raise AssertionError(f"{event_key} must remain a pose reference event, got {evidence}")
+    if event_quality.get("impact", {}).get("status") != "withheld":
+        raise AssertionError(f"impact must stay withheld without club evidence, got {evidence}")
+    if any(value != "withheld" for value in evidence.get("metricAvailability", {}).values()):
+        raise AssertionError(f"pose-only evidence must not unlock club-dependent metrics, got {evidence}")
+
+
 def test_quality_withheld_result_is_still_complete() -> None:
     withheld = {
         "ok": True,
@@ -394,6 +416,7 @@ if __name__ == "__main__":
     test_pipeline_only_uses_confident_forward_decoder()
     test_event_validation_withholds_conflicting_or_missing_club_evidence()
     test_production_reference_impact_fixture_is_partial_not_abandoned()
+    test_pose_events_remain_partial_when_impact_is_withheld()
     test_quality_withheld_result_is_still_complete()
     test_meta_timeline_prefers_video_frame_clock_over_inference_clock()
     test_wrist_gate_rejects_static_background_club_candidate()

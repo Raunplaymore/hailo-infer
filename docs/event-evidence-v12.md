@@ -51,8 +51,9 @@ remain unchanged, limiting false-positive regression.
   metrics
 - `confirmed`: independent club-head evidence satisfies the impact window
 
-The overall validation state is `usable`, `partial`, or `withheld`. `partial` exposes reference
-events while all dependent metrics remain withheld.
+The overall validation state is `usable`, `partial`, or `withheld`. `partial` exposes the available
+pose reference events while all dependent metrics remain withheld; it does not require a reference
+impact. `withheld` is reserved for cases where the pose phase path itself is not usable.
 
 ## Shaft interpolation boundary
 
@@ -85,6 +86,7 @@ person/ball/readiness classes should not be expanded as a workaround.
 - detector safety: head/handle/club accepted counts remain unchanged by the minimum fix.
 - summary safety: no tempo, impact, path, or shaft number is emitted when its availability is
   `withheld`.
+- pose-only safety: usable pose address/top/finish ends as `partial`, while impact and every
+  club-dependent metric remain `withheld` when club evidence is absent.
 - rollout target: fully withheld rate below 40% on at least 20 representative swings, with zero
   confirmed event metrics from a reference-only impact.
-
