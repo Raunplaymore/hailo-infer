@@ -7,7 +7,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from app.services.body_event_selector import select_body_events
 from app.services.coach_commentary import build_coach_comments, build_coach_finding_debug
 
-COACH_ANALYSIS_VERSION = "hailo-coach-service7-v12"
+# v13 changes the event contract: finish-adjacent decoder impact candidates can
+# now be repaired from coherent wrist evidence. Bump the version so Pi caches
+# never present a pre-repair result as if it were current.
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v13"
 
 SERVICE7_LABELS = {
     0: "person",
