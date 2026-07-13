@@ -116,6 +116,21 @@ def test_finish_adjacent_impact_uses_wrist_candidate_without_club_head() -> None
     if changed or retained.get("impactMs") != 900:
         raise AssertionError(f"a plausible decoder impact must not be rewritten, got {retained}")
 
+    validation = _validate_event_evidence(
+        body_events=refined,
+        wrist_top={"t": labels["topMs"]},
+        wrist_impact=wrist_impact,
+        club_head_track=[],
+        club_handle_track=[],
+        club_track=[],
+        body_selector_confidence=0.59,
+    )
+    impact_quality = validation.get("eventQuality", {}).get("impact", {})
+    if impact_quality.get("status") != "reference" or impact_quality.get("source") != "pose_wrist_refinement":
+        raise AssertionError(f"refined pose impact must remain visible as reference evidence, got {validation}")
+    if validation.get("metricAvailability", {}).get("impact") != "withheld":
+        raise AssertionError(f"pose reference impact must not unlock impact coaching, got {validation}")
+
 
 def test_forward_decoder_enforces_phase_order_and_duration() -> None:
     def row(time_ms: int, phase: str) -> dict:

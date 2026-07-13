@@ -1309,8 +1309,18 @@ def _validate_event_evidence(
             and any(_safe_float(point.get("t"), impact_ms) >= impact_ms for point in reference_candidates)
         )
     )
+    pose_reference_impact = (
+        body_events_usable
+        and body_events.get("impactRefinement") == "pose_wrist_finish_margin"
+    )
     if not confirmed_impact:
-        reasons.append("CLUB_IMPACT_REFERENCE_ONLY" if reference_impact else "CLUB_TRACK_INSUFFICIENT_AT_IMPACT")
+        reasons.append(
+            "CLUB_IMPACT_REFERENCE_ONLY"
+            if reference_impact
+            else "POSE_IMPACT_REFERENCE_ONLY"
+            if pose_reference_impact
+            else "CLUB_TRACK_INSUFFICIENT_AT_IMPACT"
+        )
 
     if confirmed_impact and not reasons:
         status = "usable"
@@ -1324,14 +1334,37 @@ def _validate_event_evidence(
         status = "withheld"
 
     pose_quality = "reference" if body_events_usable else "withheld"
-    impact_quality = "confirmed" if confirmed_impact else "reference" if reference_impact and body_events_usable else "withheld"
+    impact_quality = (
+        "confirmed"
+        if confirmed_impact
+        else "reference"
+        if (reference_impact or pose_reference_impact) and body_events_usable
+        else "withheld"
+    )
     event_quality = {
         "address": {"status": pose_quality, "confidence": round(_clamp(body_selector_confidence), 2), "source": "pose_phase_decoder"},
         "top": {"status": pose_quality, "confidence": round(_clamp(body_selector_confidence), 2), "source": "pose_phase_decoder"},
         "impact": {
             "status": impact_quality,
-            "confidence": round(_clamp(0.75 if confirmed_impact else min(body_selector_confidence, 0.55) if reference_impact else 0.0), 2),
-            "source": "club_head" if confirmed_impact else "pose_club_bracket" if reference_impact else "none",
+            "confidence": round(
+                _clamp(
+                    0.75
+                    if confirmed_impact
+                    else min(body_selector_confidence, 0.55)
+                    if reference_impact or pose_reference_impact
+                    else 0.0
+                ),
+                2,
+            ),
+            "source": (
+                "club_head"
+                if confirmed_impact
+                else "pose_club_bracket"
+                if reference_impact
+                else "pose_wrist_refinement"
+                if pose_reference_impact
+                else "none"
+            ),
         },
         "finish": {"status": pose_quality, "confidence": round(_clamp(body_selector_confidence), 2), "source": "pose_phase_decoder"},
     }
@@ -1340,7 +1373,7 @@ def _validate_event_evidence(
     if status == "partial":
         message = (
             "포즈 기반 스윙 이벤트는 참고값으로 제공하지만, 임팩트 클럽 근거가 확정 수준이 아니어서 템포·임팩트·경로 코칭은 보류합니다."
-            if reference_impact
+            if reference_impact or pose_reference_impact
             else "포즈 기반 address·top·finish는 참고값으로 제공하지만, 임팩트 클럽 근거가 없어 템포·임팩트·경로 코칭은 보류합니다."
         )
     elif status == "withheld":
