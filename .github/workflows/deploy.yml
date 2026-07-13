@@ -52,8 +52,16 @@ jobs:
           echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
           ls -la ~/.ssh
-          ssh-keyscan -H "${{ secrets.PI_HOST }}" >> ~/.ssh/known_hosts || true
-          ssh -o StrictHostKeyChecking=yes -o BatchMode=yes -v "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" "echo ssh-ok" || true
+          # Tailscale can take a few seconds to establish a route on a fresh
+          # GitHub runner. Do not ignore a missing host key: retry discovery,
+          # then make both the SSH probe and rsync verify it strictly.
+          for attempt in 1 2 3 4 5; do
+            ssh-keyscan -T 10 -H "${{ secrets.PI_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+            test -s ~/.ssh/known_hosts && break
+            sleep 3
+          done
+          test -s ~/.ssh/known_hosts
+          ssh -o StrictHostKeyChecking=yes -o BatchMode=yes "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" "echo ssh-ok"
 
       - name: Deploy via rsync
         run: |
