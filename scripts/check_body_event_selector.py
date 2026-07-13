@@ -24,6 +24,7 @@ from app.services.coach_pipeline import (  # noqa: E402
     _filter_track_by_bbox,
     _filter_track_by_wrist,
     _impact_stability,
+    _refine_late_body_impact,
     _normalize_times,
     _validate_event_evidence,
 )
@@ -83,6 +84,37 @@ def test_state_machine_accepts_refined_compact_top() -> None:
         raise AssertionError(f"refined compact top should remain usable, score={score}, reasons={reasons}")
     if "top_gap_too_short_without_refinement" in reasons:
         raise AssertionError(f"refined compact top should not get unrefined penalty: {reasons}")
+
+
+def test_finish_adjacent_impact_uses_wrist_candidate_without_club_head() -> None:
+    fixture = json.loads(
+        (ROOT / "fixtures/event_labels/2a9e707c-62bd-45ec-9527-d3ce9189677c.json").read_text()
+    )
+    labels = fixture["labels"]
+    observed = fixture["observed"]
+    events = {
+        "addressMs": labels["addressMs"],
+        "topMs": labels["topMs"],
+        "impactMs": observed["decoderImpactMs"],
+        "finishMs": labels["finishMs"],
+    }
+    wrist_impact = {"t": observed["wristImpactMs"]}
+    refined, changed = _refine_late_body_impact(events, wrist_impact, observed["confirmedClubHeadFrames"])
+    if not changed or refined.get("impactMs") != observed["wristImpactMs"]:
+        raise AssertionError(f"late production impact must move to the wrist candidate, got {refined}")
+    if abs(refined["impactMs"] - labels["impactMs"]) > fixture["toleranceMs"]:
+        raise AssertionError(f"refined impact must fall inside the hand-labeled video window, got {refined}")
+    if refined.get("impactRefinedFromMs") != observed["decoderImpactMs"]:
+        raise AssertionError(f"refinement must preserve the decoder candidate for audit, got {refined}")
+
+    trusted, changed = _refine_late_body_impact(events, wrist_impact, 3)
+    if changed or trusted.get("impactMs") != observed["decoderImpactMs"]:
+        raise AssertionError(f"confirmed club-head evidence must retain decoder impact, got {trusted}")
+
+    plausible = {"addressMs": 0, "topMs": 567, "impactMs": 900, "finishMs": 1467}
+    retained, changed = _refine_late_body_impact(plausible, {"t": 800}, 0)
+    if changed or retained.get("impactMs") != 900:
+        raise AssertionError(f"a plausible decoder impact must not be rewritten, got {retained}")
 
 
 def test_forward_decoder_enforces_phase_order_and_duration() -> None:
@@ -408,6 +440,7 @@ def test_point_only_impact_stability_does_not_fail_fusion() -> None:
 if __name__ == "__main__":
     test_state_machine_rejects_unrefined_early_top()
     test_state_machine_accepts_refined_compact_top()
+    test_finish_adjacent_impact_uses_wrist_candidate_without_club_head()
     test_forward_decoder_enforces_phase_order_and_duration()
     test_forward_decoder_rejects_finish_before_swing()
     test_pose_club_and_roi_motion_are_exposed_as_evidence()

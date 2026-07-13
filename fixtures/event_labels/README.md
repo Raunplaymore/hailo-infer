@@ -37,6 +37,12 @@ to verify that its pose event frames remain aligned to the video timeline and
 that its sparse club track is not mistaken for impact evidence. Full replay
 still requires the saved Pi meta and body artifacts referenced by the fixture.
 
+`2a9e707c-62bd-45ec-9527-d3ce9189677c` captures a finish-adjacent impact
+regression. Its hand-labeled video impact is 867 ms while the sparse-club
+decoder emitted 1333 ms; the pose-wrist candidate at 800 ms is accepted only
+when no confirmed club-head track exists and the decoded phase margins are
+implausibly compressed.
+
 When the Pi artifacts are present, run the stronger end-to-end verifier:
 
 ```bash

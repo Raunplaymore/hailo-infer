@@ -1,0 +1,28 @@
+{
+  "jobId": "2a9e707c-62bd-45ec-9527-d3ce9189677c",
+  "viewpoint": "down_the_line",
+  "notes": "실제 영상에서 impact가 약 0.87초인데 sparse club evidence가 forward decoder impact를 1.33초까지 지연시킨 회귀 케이스.",
+  "toleranceMs": 100,
+  "labels": {
+    "addressMs": 0,
+    "topMs": 567,
+    "impactMs": 867,
+    "finishMs": 1467
+  },
+  "observed": {
+    "decoderImpactMs": 1333,
+    "wristImpactMs": 800,
+    "confirmedClubHeadFrames": 0,
+    "confirmedClubHandleFrames": 1
+  },
+  "timeline": {
+    "fps": 30,
+    "durationMs": 2179,
+    "frames": 65
+  },
+  "artifacts": {
+    "metaPath": "/tmp/2a9e707c-62bd-45ec-9527-d3ce9189677c.meta.json",
+    "bodyPath": "/home/ray/data/body/2a9e707c-62bd-45ec-9527-d3ce9189677c.json",
+    "analysisPath": "/home/ray/data/analysis/2a9e707c-62bd-45ec-9527-d3ce9189677c.json"
+  }
+}

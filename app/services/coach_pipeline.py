@@ -84,6 +84,41 @@ def _body_selector_is_operational(viewpoint: str, selector_result: Dict[str, Any
     return False
 
 
+def _refine_late_body_impact(
+    events: Dict[str, Any],
+    wrist_impact: Optional[dict],
+    confirmed_club_head_frames: int,
+) -> Tuple[Dict[str, Any], bool]:
+    """Replace a finish-adjacent decoder impact with a coherent wrist crossing.
+
+    This is intentionally a narrow repair.  A confirmed club-head track wins.
+    Without one, the pose wrist candidate may correct the decoder only when the
+    decoded downswing is abnormally long, its post-impact phase is compressed,
+    and the wrist candidate preserves useful margins on both sides.
+    """
+    refined = dict(events)
+    if confirmed_club_head_frames > 0 or not wrist_impact:
+        return refined, False
+    address = _safe_float(events.get("addressMs"), 0.0)
+    top = _safe_float(events.get("topMs"), address)
+    impact = _safe_float(events.get("impactMs"), top)
+    finish = _safe_float(events.get("finishMs"), impact)
+    wrist = _safe_float(wrist_impact.get("t"), 0.0)
+    backswing_ms = top - address
+    downswing_ms = impact - top
+    follow_through_ms = finish - impact
+    swing_after_top_ms = finish - top
+    late_downswing = downswing_ms >= max(360.0, backswing_ms * 0.9)
+    compressed_follow_through = follow_through_ms <= max(160.0, swing_after_top_ms * 0.22)
+    wrist_has_phase_margins = top + 70.0 <= wrist <= min(impact - 120.0, finish - 120.0)
+    if not (late_downswing and compressed_follow_through and wrist_has_phase_margins):
+        return refined, False
+    refined["impactRefinedFromMs"] = round(impact)
+    refined["impactRefinement"] = "pose_wrist_finish_margin"
+    refined["impactMs"] = round(wrist)
+    return refined, True
+
+
 def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
 
@@ -1898,6 +1933,17 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         event_source = f"body_selector_down_the_line:{body_selector.get('method')}"
     wrist_impact = _find_impact_from_wrist_track(wrist_track, wrist_top, club_head_track) if wrist_top else None
     wrist_finish = _find_finish_from_wrist_track(wrist_track, wrist_impact) if wrist_impact else None
+    body_selector_events, impact_refined = _refine_late_body_impact(
+        body_selector_events,
+        wrist_impact,
+        len(club_head_track),
+    ) if use_body_selector else (body_selector_events, False)
+    if impact_refined:
+        impact_idx = _nearest_track_index_by_time(
+            motion_track,
+            _safe_float(body_selector_events.get("impactMs"), 0.0),
+        )
+        event_source = f"{event_source}:pose-wrist-impact-refinement"
     event_validation = _validate_event_evidence(
         body_events=body_selector_events if use_body_selector else {},
         wrist_top=wrist_top,
