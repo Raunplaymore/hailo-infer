@@ -36,6 +36,11 @@ jobs:
           PYTHONPYCACHEPREFIX=/tmp/hailo_pycache python -m py_compile app/services/coach_pipeline.py scripts/check_body_event_selector.py
           PYTHONDONTWRITEBYTECODE=1 python scripts/check_body_event_selector.py
 
+      - name: Check club preprocessing lab
+        run: |
+          PYTHONPYCACHEPREFIX=/tmp/hailo_pycache python -m py_compile scripts/club_preprocess_lab.py scripts/check_club_preprocess_lab.py
+          PYTHONDONTWRITEBYTECODE=1 python scripts/check_club_preprocess_lab.py
+
       - name: Set up Tailscale
         uses: tailscale/github-action@v2
         with:
