@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from scripts.club_preprocess_lab import cv2, main, score_meta  # noqa: E402
+from scripts.club_preprocess_lab import camera_meta, cv2, main, score_meta  # noqa: E402
 
 
 def write_video(path: Path) -> None:
@@ -55,6 +55,38 @@ def test_prepare_and_score() -> None:
         assert result["shaftEvidenceScore"] > 0
 
 
+def test_camera_model_payload() -> None:
+    # Request construction is covered without opening a socket.
+    import urllib.request
+
+    original = urllib.request.urlopen
+    captured = {}
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self):
+            return b'{"ok":true,"metaPath":"/tmp/lab.meta.json"}'
+
+    def fake_urlopen(request, timeout):
+        captured["request"] = request
+        captured["timeout"] = timeout
+        return Response()
+
+    urllib.request.urlopen = fake_urlopen
+    try:
+        assert camera_meta("http://camera", "lab-source", Path("/home/ray/uploads/source.mp4"), type("Profile", (), {"frames": 30, "fps": 30, "width": 1920, "height": 1080})(), 12, "yolov8s") == Path("/tmp/lab.meta.json")
+    finally:
+        urllib.request.urlopen = original
+    payload = json.loads(captured["request"].data.decode("utf-8"))
+    assert payload["model"] == "yolov8s"
+
+
 if __name__ == "__main__":
     test_prepare_and_score()
+    test_camera_model_payload()
     print("club preprocess lab checks passed")

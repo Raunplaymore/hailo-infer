@@ -263,7 +263,7 @@ def is_within(path: Path, parent: Path) -> bool:
         return False
 
 
-def camera_meta(camera_url: str, job_id: str, input_path: Path, profile: VideoProfile, timeout: int) -> Path:
+def camera_meta(camera_url: str, job_id: str, input_path: Path, profile: VideoProfile, timeout: int, model: str) -> Path:
     duration_sec = profile.frames / profile.fps if profile.fps > 0 else None
     payload = {
         "jobId": job_id,
@@ -275,7 +275,9 @@ def camera_meta(camera_url: str, job_id: str, input_path: Path, profile: VideoPr
         "height": profile.height,
         "fps": profile.fps,
         "durationMs": round(duration_sec * 1000) if duration_sec else None,
-        "model": "service7",
+        # pi_camera exposes yolov8s as the stable public model name. service7
+        # remains an internal pipeline label and is not accepted by this API.
+        "model": model,
         "debugDetections": False,
     }
     request = urllib.request.Request(
@@ -323,7 +325,14 @@ def run(args: argparse.Namespace) -> int:
             destination = copied_dir / f"{safe_name(name)}.mp4"
             shutil.copy2(input_path, destination)
             input_path = destination
-        meta_paths[name] = camera_meta(args.camera_url, f"{safe_name(args.job_prefix)}-{safe_name(name)}", input_path, profile, args.timeout)
+        meta_paths[name] = camera_meta(
+            args.camera_url,
+            f"{safe_name(args.job_prefix)}-{safe_name(name)}",
+            input_path,
+            profile,
+            args.timeout,
+            args.model,
+        )
 
     score_args = argparse.Namespace(meta=[f"{name}={path}" for name, path in meta_paths.items()], output=str(workspace / "score.json"))
     score(score_args)
@@ -386,6 +395,7 @@ def main() -> int:
     run_parser.add_argument("--body", help="optional pose body JSON for static wrist/arm ROI")
     run_parser.add_argument("--job-prefix", required=True, help="unique lab-only ID prefix")
     run_parser.add_argument("--camera-url", default="http://127.0.0.1:3001", help="local pi_camera URL")
+    run_parser.add_argument("--model", default="yolov8s", help="public pi_camera model name")
     run_parser.add_argument("--upload-dir", default="/home/ray/uploads", help="pi_camera upload directory")
     run_parser.add_argument("--timeout", type=int, default=180, help="per-variant camera request timeout in seconds")
     run_parser.set_defaults(handler=run)
