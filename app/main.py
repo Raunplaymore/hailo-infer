@@ -4,12 +4,15 @@ from app.core.config import Settings
 from app.schemas import (
     BodyVideoRequest,
     BodyVideoResponse,
+    ClubPreprocessLabRequest,
+    ClubPreprocessLabResponse,
     HealthResponse,
     JobCreateRequest,
     JobCreateResponse,
     JobStatusResponse,
 )
 from app.services.body_pipeline import BodyPipelineError, analyze_body_video
+from app.services.club_preprocess_lab import ClubPreprocessLabError, run_club_preprocess_lab
 from app.services.coach_pipeline import COACH_ANALYSIS_VERSION, CoachError, analyze_meta
 from app.services.job_store import JobStore
 from app.services.meta_loader import MetaLoadError, load_meta
@@ -126,6 +129,22 @@ def create_body_artifact(payload: BodyVideoRequest) -> BodyVideoResponse:
                 "errorMessage": str(exc),
             },
         ) from exc
+
+
+@app.post("/v1/labs/club-preprocess", response_model=ClubPreprocessLabResponse)
+def create_club_preprocess_lab(payload: ClubPreprocessLabRequest) -> ClubPreprocessLabResponse:
+    """Run only derived-video detection passes; never create an analysis job."""
+    try:
+        return ClubPreprocessLabResponse(
+            **run_club_preprocess_lab(
+                settings=settings,
+                job_id=payload.jobId,
+                input_path=payload.inputPath,
+                body_path=payload.bodyPath,
+            )
+        )
+    except ClubPreprocessLabError as exc:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": str(exc)}) from exc
 
 
 @app.post("/v1/jobs", response_model=JobCreateResponse)

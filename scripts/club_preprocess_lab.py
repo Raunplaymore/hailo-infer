@@ -263,7 +263,7 @@ def is_within(path: Path, parent: Path) -> bool:
         return False
 
 
-def camera_meta(camera_url: str, job_id: str, input_path: Path, profile: VideoProfile, timeout: int, model: str) -> Path:
+def camera_meta(camera_url: str, job_id: str, input_path: Path, profile: VideoProfile, timeout: int, model: str | None) -> Path:
     duration_sec = profile.frames / profile.fps if profile.fps > 0 else None
     payload = {
         "jobId": job_id,
@@ -275,11 +275,13 @@ def camera_meta(camera_url: str, job_id: str, input_path: Path, profile: VideoPr
         "height": profile.height,
         "fps": profile.fps,
         "durationMs": round(duration_sec * 1000) if duration_sec else None,
-        # pi_camera exposes yolov8s as the stable public model name. service7
-        # remains an internal pipeline label and is not accepted by this API.
-        "model": model,
         "debugDetections": False,
     }
+    # Omit the field for the lab's default mode: the camera selects its active
+    # production detector itself. This avoids coupling an experiment to a
+    # deployment-specific public alias.
+    if model:
+        payload["model"] = model
     request = urllib.request.Request(
         f"{camera_url.rstrip('/')}/api/meta/from-file",
         data=json.dumps(payload).encode("utf-8"),
@@ -395,7 +397,7 @@ def main() -> int:
     run_parser.add_argument("--body", help="optional pose body JSON for static wrist/arm ROI")
     run_parser.add_argument("--job-prefix", required=True, help="unique lab-only ID prefix")
     run_parser.add_argument("--camera-url", default="http://127.0.0.1:3001", help="local pi_camera URL")
-    run_parser.add_argument("--model", default="yolov8s", help="public pi_camera model name")
+    run_parser.add_argument("--model", help="optional pi_camera model override")
     run_parser.add_argument("--upload-dir", default="/home/ray/uploads", help="pi_camera upload directory")
     run_parser.add_argument("--timeout", type=int, default=180, help="per-variant camera request timeout in seconds")
     run_parser.set_defaults(handler=run)

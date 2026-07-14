@@ -205,3 +205,17 @@ class BodyVideoResponse(BaseModel):
     summary: Optional[str] = None
     errorCode: Optional[str] = None
     errorMessage: Optional[str] = None
+
+
+class ClubPreprocessLabRequest(BaseModel):
+    jobId: str
+    inputPath: str
+    bodyPath: Optional[str] = None
+
+
+class ClubPreprocessLabResponse(BaseModel):
+    ok: bool
+    jobId: str
+    labOnly: bool = True
+    report: Dict[str, Any]
+    scorePath: str

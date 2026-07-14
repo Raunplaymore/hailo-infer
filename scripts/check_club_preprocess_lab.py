@@ -79,11 +79,11 @@ def test_camera_model_payload() -> None:
 
     urllib.request.urlopen = fake_urlopen
     try:
-        assert camera_meta("http://camera", "lab-source", Path("/home/ray/uploads/source.mp4"), type("Profile", (), {"frames": 30, "fps": 30, "width": 1920, "height": 1080})(), 12, "yolov8s") == Path("/tmp/lab.meta.json")
+        assert camera_meta("http://camera", "lab-source", Path("/home/ray/uploads/source.mp4"), type("Profile", (), {"frames": 30, "fps": 30, "width": 1920, "height": 1080})(), 12, None) == Path("/tmp/lab.meta.json")
     finally:
         urllib.request.urlopen = original
     payload = json.loads(captured["request"].data.decode("utf-8"))
-    assert payload["model"] == "yolov8s"
+    assert "model" not in payload
 
 
 if __name__ == "__main__":
