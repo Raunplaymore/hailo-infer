@@ -48,6 +48,8 @@ def require_cv2() -> Any:
 
 def video_profile(source: Path) -> VideoProfile:
     opencv = require_cv2()
+    if not source.is_file():
+        raise FileNotFoundError(f"Source video does not exist: {source}")
     capture = opencv.VideoCapture(str(source))
     if not capture.isOpened():
         raise RuntimeError(f"Unable to open source video: {source}")
