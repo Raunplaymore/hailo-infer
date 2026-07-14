@@ -1,0 +1,82 @@
+name: Run club preprocessing lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      source:
+        description: Original video path on the Raspberry Pi (must be below /home/ray/uploads)
+        required: true
+        type: string
+      body:
+        description: Pose body JSON path on the Raspberry Pi
+        required: false
+        type: string
+      job_prefix:
+        description: Unique lab-only ID prefix
+        required: true
+        type: string
+      workspace:
+        description: Lab output directory on the Raspberry Pi
+        required: true
+        default: /home/ray/data/labs/club-preprocess
+        type: string
+
+jobs:
+  run-lab:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Set up Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+
+      - name: Set up verified SSH access
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          for attempt in 1 2 3 4 5; do
+            ssh-keyscan -T 10 -H "${{ secrets.PI_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+            test -s ~/.ssh/known_hosts && break
+            sleep 3
+          done
+          test -s ~/.ssh/known_hosts
+          ssh -o StrictHostKeyChecking=yes -o BatchMode=yes "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" "echo ssh-ok"
+
+      - name: Run isolated Hailo metadata comparison
+        shell: bash
+        env:
+          PI_HOST: ${{ secrets.PI_HOST }}
+          PI_USER: ${{ secrets.PI_USER }}
+          SOURCE: ${{ inputs.source }}
+          BODY: ${{ inputs.body }}
+          JOB_PREFIX: ${{ inputs.job_prefix }}
+          WORKSPACE_ROOT: ${{ inputs.workspace }}
+        run: |
+          set -euo pipefail
+          case "$JOB_PREFIX" in *[!a-zA-Z0-9._-]*|'') echo "Invalid job prefix" >&2; exit 2;; esac
+          case "$SOURCE" in /home/ray/uploads/*) ;; *) echo "Source must be below /home/ray/uploads" >&2; exit 2;; esac
+          case "$BODY" in ''|/home/ray/data/body/*) ;; *) echo "Body must be below /home/ray/data/body" >&2; exit 2;; esac
+          case "$WORKSPACE_ROOT" in /home/ray/data/labs/club-preprocess*) ;; *) echo "Workspace must be below the club preprocessing lab root" >&2; exit 2;; esac
+          SOURCE_B64="$(printf %s "$SOURCE" | base64 | tr -d '\n')"
+          BODY_B64="$(printf %s "$BODY" | base64 | tr -d '\n')"
+          PREFIX_B64="$(printf %s "$JOB_PREFIX" | base64 | tr -d '\n')"
+          WORKSPACE_B64="$(printf %s "$WORKSPACE_ROOT/$JOB_PREFIX" | base64 | tr -d '\n')"
+          ssh -o StrictHostKeyChecking=yes -o BatchMode=yes "$PI_USER@$PI_HOST" "SOURCE_B64=$SOURCE_B64 BODY_B64=$BODY_B64 PREFIX_B64=$PREFIX_B64 WORKSPACE_B64=$WORKSPACE_B64 bash -s" <<'REMOTE'
+          set -euo pipefail
+          SOURCE="$(printf %s "$SOURCE_B64" | base64 -d)"
+          BODY="$(printf %s "$BODY_B64" | base64 -d)"
+          JOB_PREFIX="$(printf %s "$PREFIX_B64" | base64 -d)"
+          WORKSPACE="$(printf %s "$WORKSPACE_B64" | base64 -d)"
+          cd /home/ray/hailo-infer
+          if [ -n "$BODY" ]; then
+            .venv/bin/python scripts/club_preprocess_lab.py run --source "$SOURCE" --body "$BODY" --workspace "$WORKSPACE" --job-prefix "$JOB_PREFIX"
+          else
+            .venv/bin/python scripts/club_preprocess_lab.py run --source "$SOURCE" --workspace "$WORKSPACE" --job-prefix "$JOB_PREFIX"
+          fi
+          cat "$WORKSPACE/score.json"
+          REMOTE
