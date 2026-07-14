@@ -2145,8 +2145,8 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "key": "event_segmentation_unreliable", "category": "quality", "severity": "high", "confidence": 1.0,
             "priority": "이벤트 참고" if event_validation["status"] == "partial" else "분석 보류",
             "evidence": "스윙 이벤트는 포즈 참고값으로만 확보됐고 클럽 기반 확정 근거가 부족합니다.",
-            "interpretation": event_validation["message"], "action": "클럽 전체가 address부터 finish까지 화면에 보이도록 다시 촬영하세요.",
-            "drill": None, "checkpoint": "임팩트 전후에 club head와 handle 검출이 연속되는지 확인합니다.",
+            "interpretation": event_validation["message"], "action": "클럽이 화면에 보여도 club head·handle 점이 동시에 안정적으로 분리되지 않았습니다. 이 구간은 보정·학습 후보로 보관하세요.",
+            "drill": None, "checkpoint": "임팩트 전후에 club head와 handle 점이 동시에 연속 검출되는지 확인합니다.",
             "caution": "템포·임팩트·경로 기반 코칭은 제공하지 않습니다.", "theory": "분석 품질: 이벤트 근거가 충돌하면 이벤트 기반 코칭을 보류합니다.",
         }
         safe_findings = [
