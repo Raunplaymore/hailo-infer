@@ -68,7 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$MODE" = inventory ]; then
-            ssh -o StrictHostKeyChecking=yes -o BatchMode=yes "$PI_USER@$PI_HOST" "find /home/ray/uploads -maxdepth 2 -type f \\( -iname '*.mp4' -o -iname '*.h264' \\) -printf '%TY-%Tm-%Td %TH:%TM %10s %p\\n' | sort -r | head -100"
+            ssh -o StrictHostKeyChecking=yes -o BatchMode=yes "$PI_USER@$PI_HOST" "printf '%s\\n' '=== videos ==='; find /home/ray/uploads -maxdepth 2 -type f \\( -iname '*.mp4' -o -iname '*.h264' \\) -printf '%TY-%Tm-%Td %TH:%TM %10s %p\\n' | sort -r | head -100; printf '%s\\n' '=== pose bodies ==='; find /home/ray/data/body -maxdepth 1 -type f -name '*.json' -printf '%TY-%Tm-%Td %TH:%TM %10s %p\\n' | sort -r | head -100"
             exit 0
           fi
           test "$MODE" = run || { echo "Invalid mode" >&2; exit 2; }
