@@ -62,7 +62,7 @@ class Tempo(BaseModel):
 
 class ImpactStability(BaseModel):
     label: str
-    score: float
+    score: Optional[float] = None
 
 
 class ShaftPlane(BaseModel):
@@ -175,6 +175,8 @@ class JobResult(BaseModel):
     summary: Optional[str]
     coachSummary: Optional[List[str]] = None
     confidence: Optional[float] = None
+    analysisQuality: Optional[Dict[str, Any]] = None
+    eventValidation: Optional[Dict[str, Any]] = None
     meta: ResultMeta
     debug: Optional[Dict[str, Any]] = None
     progress: Optional[ProgressPayload] = None

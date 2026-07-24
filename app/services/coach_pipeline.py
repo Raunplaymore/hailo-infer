@@ -7,10 +7,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from app.services.body_event_selector import select_body_events
 from app.services.coach_commentary import build_coach_comments, build_coach_finding_debug
 
-# v13 changes the event contract: finish-adjacent decoder impact candidates can
-# now be repaired from coherent wrist evidence. Bump the version so Pi caches
-# never present a pre-repair result as if it were current.
-COACH_ANALYSIS_VERSION = "hailo-coach-service7-v13"
+# v14 changes metric semantics: observations, derived values, and validated
+# coaching claims are gated independently. Bump the version so Pi caches never
+# present an ungated v13 result as if it were current.
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v14"
 
 SERVICE7_LABELS = {
     0: "person",
@@ -1741,12 +1741,13 @@ def _tracking_quality(
     def avg_conf(track: List[dict]) -> float:
         return _mean([p["conf"] for p in track])
 
+    # This is an observation-coverage index, not a probability that the
+    # resulting golf diagnosis is correct.  Ball/person/readiness observations
+    # must not make a weak club track look trustworthy.
     quality = (
-        coverage(club_head) * 0.45
-        + coverage(handle) * 0.2
-        + coverage(club) * 0.1
-        + coverage(ball) * 0.15
-        + coverage(person) * 0.1
+        coverage(club_head) * 0.55
+        + coverage(handle) * 0.30
+        + coverage(club) * 0.15
     )
     if quality >= 0.65:
         label = "good"
@@ -1769,6 +1770,7 @@ def _tracking_quality(
         "clubConfidence": round(avg_conf(club), 2),
         "ballConfidence": round(avg_conf(ball), 2),
         "personConfidence": round(avg_conf(person), 2),
+        "basis": "club_observation_coverage_v2",
     }
 
 
@@ -1812,6 +1814,114 @@ def _ball_metric(ball_track: List[dict], impact_ms: int, width: Optional[float],
         "speedRelative": speed,
         "confidence": round(_mean([p["conf"] for p in points]), 2),
     }
+
+
+def _metric_evidence(
+    status: str,
+    *reasons: str,
+    source: Optional[str] = None,
+    observed_frames: Optional[int] = None,
+) -> Dict[str, object]:
+    evidence: Dict[str, object] = {
+        "status": status,
+        "reasons": [reason for reason in reasons if reason],
+    }
+    if source:
+        evidence["source"] = source
+    if observed_frames is not None:
+        evidence["observedFrames"] = observed_frames
+    return evidence
+
+
+def _finalize_metric_evidence(
+    event_validation: Dict[str, object],
+    *,
+    viewpoint: str,
+    shaft: Dict[str, object],
+    backswing: Dict[str, object],
+    body_metrics: Dict[str, object],
+) -> Dict[str, Dict[str, object]]:
+    event_usable = event_validation.get("status") == "usable"
+    shaft_source = str(shaft.get("source") or "")
+    shaft_confidence = _safe_float(shaft.get("confidence"), 0.0)
+    shaft_samples = _safe_int(shaft.get("sampleCount"), 0)
+    shaft_has_value = shaft.get("angleDeg") is not None
+    shaft_confirmed = (
+        event_usable
+        and shaft_source == "head_handle"
+        and shaft_confidence >= 0.35
+        and shaft_samples >= 8
+    )
+    shaft_status = "confirmed" if shaft_confirmed else "reference" if event_usable and shaft_has_value else "withheld"
+    shaft_reasons: list[str] = []
+    if not event_usable:
+        shaft_reasons.append("EVENT_EVIDENCE_INSUFFICIENT")
+    if shaft_source != "head_handle":
+        shaft_reasons.append("HEAD_HANDLE_PAIR_REQUIRED")
+    if shaft_confidence < 0.35:
+        shaft_reasons.append("SHAFT_CONFIDENCE_LOW")
+    if shaft_samples < 8:
+        shaft_reasons.append("SHAFT_SAMPLE_COUNT_LOW")
+
+    pose_coverage = body_metrics.get("poseCoverage") if isinstance(body_metrics, dict) else None
+    pose_score = _safe_float(pose_coverage.get("score"), 0.0) if isinstance(pose_coverage, dict) else 0.0
+    body_status = "reference" if pose_score >= 0.4 else "withheld"
+
+    # v14 deliberately distinguishes an observed value from a validated golf
+    # claim.  Tempo/top are pose-reference events, 2D path lacks target-line
+    # calibration, single-swing point spread is not repeatability, and the
+    # current ball displacement implementation is not a validated flight track.
+    evidence = {
+        "tempo": _metric_evidence(
+            "reference" if event_usable else "withheld",
+            "POSE_EVENT_TIMING_REFERENCE_ONLY" if event_usable else "EVENT_EVIDENCE_INSUFFICIENT",
+            source="pose_phase_decoder",
+        ),
+        "impact": _metric_evidence(
+            "withheld",
+            "SINGLE_SWING_SPREAD_IS_NOT_REPEATABILITY",
+            source="club_motion_window",
+        ),
+        "impactStability": _metric_evidence(
+            "withheld",
+            "SINGLE_SWING_SPREAD_IS_NOT_REPEATABILITY",
+            source="club_motion_window",
+        ),
+        "path": _metric_evidence(
+            "withheld",
+            "VIEWPOINT_UNKNOWN" if viewpoint not in {"down_the_line", "face_on"} else "TARGET_LINE_NOT_CALIBRATED",
+            "HANDEDNESS_NOT_NORMALIZED",
+            source="2d_top_to_impact_displacement",
+        ),
+        "shaft": _metric_evidence(
+            shaft_status,
+            *shaft_reasons,
+            source=shaft_source or "none",
+            observed_frames=shaft_samples,
+        ),
+        "backswing": _metric_evidence(
+            "reference" if event_usable and backswing.get("label") not in {None, "unknown", "withheld"} else "withheld",
+            "SINGLE_CAMERA_2D_REFERENCE",
+            source=str(backswing.get("source") or "none"),
+        ),
+        "ball": _metric_evidence(
+            "withheld",
+            "BALL_IDENTITY_TRACK_NOT_VALIDATED",
+            "BALL_FLIGHT_COORDINATES_NOT_CALIBRATED",
+            source="golf_ball_detector",
+        ),
+        "body": _metric_evidence(
+            body_status,
+            "SINGLE_CAMERA_2D_REFERENCE" if body_status == "reference" else "POSE_COVERAGE_INSUFFICIENT",
+            source="pose",
+        ),
+    }
+    event_validation["metricAvailability"] = {
+        key: str(value["status"])
+        for key, value in evidence.items()
+    }
+    event_validation["metricEvidence"] = evidence
+    return evidence
 
 
 def _fusion_metrics(
@@ -2181,46 +2291,140 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     ball = _ball_metric(ball_track, impact_ms, width, height)
     body_metrics = _body_pose_metrics(body_artifact, address_ms, top_ms, impact_ms)
     fusion_metrics = _fusion_metrics(tempo, shaft, backswing, impact_stability, swing_plane, body_metrics, tracking)
+    raw_unvalidated_metrics = {
+        "swingPlane": dict(swing_plane),
+        "impactStability": dict(impact_stability),
+        "ball": dict(ball),
+        "fusion": dict(fusion_metrics),
+    }
+    metric_evidence = _finalize_metric_evidence(
+        event_validation,
+        viewpoint=viewpoint,
+        shaft=shaft,
+        backswing=backswing,
+        body_metrics=body_metrics,
+    )
     wrist_sources: Dict[str, int] = {}
     for point in wrist_track:
         source_name = str(point.get("wristSource") or "unknown")
         wrist_sources[source_name] = wrist_sources.get(source_name, 0) + 1
     overlay = _build_overlay_payload(body_artifact, club_head_track, handle_track)
 
+    decoder_confidence = _safe_float(body_selector.get("confidence"), 0.0) if use_body_selector else None
+    pose_coverage_metric = body_metrics.get("poseCoverage") if isinstance(body_metrics, dict) else None
+    pose_coverage = _safe_float(pose_coverage_metric.get("score"), 0.0) if isinstance(pose_coverage_metric, dict) else 0.0
+    event_coverage = decoder_confidence if decoder_confidence is not None else 0.0
     confidence = round(
         _clamp(
-            tracking["score"] * 0.42
-            + swing_conf * 0.16
-            + shaft["confidence"] * 0.16
-            + impact_score * 0.14
-            + readiness["confidence"] * 0.12
+            tracking["score"] * 0.55
+            + event_coverage * 0.25
+            + pose_coverage * 0.20
         ),
         2,
     )
-    decoder_confidence = _safe_float(body_selector.get("confidence"), 0.0) if use_body_selector else None
-    if decoder_confidence is not None:
-        # Event segmentation is a separate quality axis: a well-tracked club
-        # should not make an implausible phase path appear fully trustworthy.
-        confidence = round(_clamp(confidence * 0.8 + decoder_confidence * 0.2), 2)
+    analysis_quality = {
+        "label": "observation_coverage",
+        "score": confidence,
+        "meaning": "입력 관측 커버리지 지수이며 코칭 정답 확률이 아닙니다.",
+        "components": {
+            "clubObservationCoverage": tracking["score"],
+            "eventPathCoverage": round(event_coverage, 2),
+            "poseCoverage": round(pose_coverage, 2),
+        },
+    }
 
-    coach_summary = _coach_comments(tempo, shaft, backswing, impact_stability, readiness, tracking, ball, swing_plane, body_metrics, fusion_metrics)
-    coach_findings = build_coach_finding_debug(
-        tempo,
-        shaft,
-        backswing,
-        impact_stability,
+    tempo_for_coach: Dict[str, object] = {}
+    shaft_for_coach = shaft if metric_evidence["shaft"]["status"] == "confirmed" else {"label": "withheld"}
+    backswing_for_coach = (
+        backswing
+        if metric_evidence["backswing"]["status"] == "confirmed" or backswing.get("label") == "adequate"
+        else {"label": "withheld"}
+    )
+    impact_for_coach = {"label": "withheld"}
+    ball_for_coach = {"launchDirection": "unknown"}
+    path_for_coach = {"label": "withheld", "confidence": 0.0}
+    body_for_coach = {
+        "poseCoverage": body_metrics.get("poseCoverage"),
+    }
+    fusion_for_coach: Dict[str, object] = {}
+
+    coach_summary = _coach_comments(
+        tempo_for_coach,
+        shaft_for_coach,
+        backswing_for_coach,
+        impact_for_coach,
         readiness,
         tracking,
-        ball,
-        swing_plane,
-        body_metrics,
-        fusion_metrics,
+        ball_for_coach,
+        path_for_coach,
+        body_for_coach,
+        fusion_for_coach,
+    )
+    coach_findings = build_coach_finding_debug(
+        tempo_for_coach,
+        shaft_for_coach,
+        backswing_for_coach,
+        impact_for_coach,
+        readiness,
+        tracking,
+        ball_for_coach,
+        path_for_coach,
+        body_for_coach,
+        fusion_for_coach,
         suppress_redundant=True,
     )
+
+    tempo = {**tempo, "status": metric_evidence["tempo"]["status"], "comment": "백스윙/다운스윙 구간의 관측 시간 비율이며 전환 순서를 직접 증명하지 않습니다."}
+    if metric_evidence["path"]["status"] == "withheld":
+        swing_plane = {
+            "label": "withheld",
+            "confidence": 0.0,
+            "source": "metric_evidence_gate",
+            "comment": "카메라 시점·타깃 라인·좌우 타석 보정이 없어 경로 판정을 보류합니다.",
+        }
+    impact_stability = {
+        "label": "withheld",
+        "score": None,
+        "source": "metric_evidence_gate",
+        "comment": "한 번의 스윙에서 클럽이 이동한 폭은 임팩트 재현성 점수가 아니므로 판정을 보류합니다.",
+    }
+    ball = {
+        "launchDirection": "unknown",
+        "launchAngle": None,
+        "speedRelative": "unknown",
+        "confidence": 0.0,
+        "status": "withheld",
+        "comment": "연속적인 공 비행 identity와 좌표 보정이 없어 구질 수치를 제공하지 않습니다.",
+    }
+    shaft = {**shaft, "status": metric_evidence["shaft"]["status"]}
+    backswing = {**backswing, "status": metric_evidence["backswing"]["status"]}
+    fusion_metrics = {
+        "transitionTiming": {
+            "label": "reference" if metric_evidence["tempo"]["status"] == "reference" else "withheld",
+            "backswingMs": tempo.get("backswingMs"),
+            "downswingMs": tempo.get("downswingMs"),
+            "ratio": tempo.get("ratio"),
+            "confidence": 0.0,
+            "source": "tempo_description_only",
+            "comment": "시간 비율만 제공하며 하체-몸통-팔 순서는 판정하지 않습니다.",
+        },
+        "sequencing": {
+            "label": "unknown",
+            "confidence": 0.0,
+            "source": "metric_evidence_gate",
+            "comment": "관절별 속도 피크 순서가 검증되기 전에는 시퀀싱을 확정하지 않습니다.",
+        },
+        "releaseTiming": {
+            "label": "unknown",
+            "confidence": 0.0,
+            "source": "metric_evidence_gate",
+            "comment": "공·페이스·연속 샤프트 근거가 없어 릴리스 타이밍을 판정하지 않습니다.",
+        },
+    }
     if event_validation["status"] != "usable":
         tempo = {"backswingMs": None, "downswingMs": None, "ratio": None, "status": "withheld"}
         swing_plane = {"label": "withheld", "confidence": 0.0, "source": "event_validation"}
-        impact_stability = {"label": "withheld", "score": 0.0}
+        impact_stability = {"label": "withheld", "score": None}
         shaft = {"label": "withheld", "confidence": 0.0, "sampleCount": 0}
         backswing = {"label": "withheld", "score": 0.0, "source": "event_validation"}
         ball = {"launchDirection": "unknown", "launchAngle": None, "speedRelative": "unknown", "confidence": 0.0}
@@ -2245,20 +2449,20 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             else "[분석 보류] 이벤트 근거가 부족해 템포·임팩트·경로 코칭은 제공하지 않습니다."
         ]
     coach_findings_debug = build_coach_finding_debug(
-        tempo,
-        shaft,
-        backswing,
-        impact_stability,
+        tempo_for_coach,
+        shaft_for_coach,
+        backswing_for_coach,
+        impact_for_coach,
         readiness,
         tracking,
-        ball,
-        swing_plane,
-        body_metrics,
-        fusion_metrics,
+        ball_for_coach,
+        path_for_coach,
+        body_for_coach,
+        fusion_for_coach,
         limit=12,
     )
     if event_validation["status"] == "usable":
-        summary = f"service7 분석 완료: tempo {ratio}:1, shaft {shaft['label']}, backswing {backswing['label']}."
+        summary = f"관측 분석 완료: tempo {ratio}:1은 참고값이며, 검증되지 않은 임팩트·경로·공 수치는 보류했습니다."
     elif event_validation["status"] == "partial":
         summary = "포즈 기반 스윙 이벤트는 참고값으로 제공하며, 템포·임팩트·경로 수치는 클럽 추적 부족으로 보류했습니다."
     else:
@@ -2307,6 +2511,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         "coachSummary": coach_summary,
         "coachFindings": coach_findings,
         "confidence": confidence,
+        "analysisQuality": analysis_quality,
         "eventValidation": event_validation,
         "overlay": overlay,
         "analysisVersion": COACH_ANALYSIS_VERSION,
@@ -2327,6 +2532,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "bodySelectorUsed": bool(use_body_selector),
             "eventSegmentationConfidence": decoder_confidence,
             "eventValidation": event_validation,
+            "unvalidatedMetrics": raw_unvalidated_metrics,
             "impactEventMeaning": "impact_candidate" if use_body_selector else "tracking_proxy",
             "bodySelectorEvents": body_selector_events if body_selector.get("available") else None,
             "bodySelectorDebug": body_selector.get("debug") if body_selector.get("available") else None,

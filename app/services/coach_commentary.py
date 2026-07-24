@@ -236,7 +236,7 @@ def _backswing_finding(backswing: Dict[str, object]) -> Optional[CoachFinding]:
     if label == "adequate":
         source_text = "손목 추적" if source == "pose_wrist" else "클럽 추적"
         if source == "pose_wrist":
-            action = "다음 우선순위는 크기보다 전환 순서와 임팩트 재현성입니다."
+            action = "크기를 더 키우기보다 같은 탑 위치가 반복되는지 먼저 확인하세요."
         else:
             action = "더 크게 만들기보다 같은 탑 위치를 반복하는 쪽이 좋습니다."
         return CoachFinding(
@@ -253,12 +253,14 @@ def _backswing_finding(backswing: Dict[str, object]) -> Optional[CoachFinding]:
     return None
 
 
-def _shaft_finding(shaft_plane: Dict[str, object]) -> CoachFinding:
+def _shaft_finding(shaft_plane: Dict[str, object]) -> Optional[CoachFinding]:
     label = str(shaft_plane.get("label") or "")
     confidence = _safe_float(shaft_plane.get("confidence"), 0.0)
     source = str(shaft_plane.get("source") or "")
     angle = shaft_plane.get("angleDeg")
     angle_text = f"{angle}도" if angle is not None else "각도 미확정"
+    if label in {"", "unknown", "withheld"}:
+        return None
 
     if label == "flat":
         return CoachFinding(
@@ -301,17 +303,7 @@ def _shaft_finding(shaft_plane: Dict[str, object]) -> CoachFinding:
             checkpoint="샤프트보다 임팩트 전후 클럽헤드 위치 변동을 우선 봅니다.",
             caution=_caution(confidence, source),
         )
-    return CoachFinding(
-        key="shaft_unknown",
-        category="shaft_plane",
-        severity="info",
-        confidence=0.0,
-        evidence="샤프트 플레인은 club_head와 handle 동시 추적이 부족해 판단하지 않습니다.",
-        interpretation="bbox나 단일 점만으로는 샤프트 방향을 확정하기 어렵습니다.",
-        action="이 항목은 촬영/검출 품질 개선 후 다시 보세요.",
-        priority="품질",
-        checkpoint="club_head와 club_handle이 동시에 잡히는 프레임 수를 먼저 늘립니다.",
-    )
+    return None
 
 
 def _swing_plane_finding(swing_plane: Dict[str, object]) -> Optional[CoachFinding]:
