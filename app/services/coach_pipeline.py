@@ -339,27 +339,37 @@ def _filter_track_by_wrist(
     max_area: float,
     max_width: float,
     max_height: float,
+    coordinate_x_scale: float = 1.0,
+    coordinate_y_scale: float = 1.0,
 ) -> List[dict]:
     """Discard club candidates that cannot be geometrically tied to the hands.
 
     A per-frame detector can confidently lock on to a static background detail.
     The grip/head must remain within a plausible shaft-length envelope from the
     pose wrist and must not occupy an implausibly large part of the frame.
+
+    ``metaNormalizer`` maps detections from the square Hailo input back to the
+    display/source frame.  A portrait source makes source-normalized x values
+    wider than their square-input equivalents.  Apply the supplied scales
+    before comparing a distance or bbox dimension to thresholds, otherwise a
+    correct portrait club is rejected merely because it was unletterboxed.
     """
     if not track or not wrist_track:
         return []
+    x_scale = max(1e-6, _safe_float(coordinate_x_scale, 1.0))
+    y_scale = max(1e-6, _safe_float(coordinate_y_scale, 1.0))
     accepted: List[dict] = []
     for point in track:
         frame = _safe_int(point.get("frame"), -1)
         nearest = min(wrist_track, key=lambda wrist: abs(_safe_int(wrist.get("frame"), -9999) - frame))
         if abs(_safe_int(nearest.get("frame"), -9999) - frame) > 2:
             continue
-        width = _safe_float(point.get("w"))
-        height = _safe_float(point.get("h"))
+        width = _safe_float(point.get("w")) * x_scale
+        height = _safe_float(point.get("h")) * y_scale
         area = width * height
         distance = math.hypot(
-            _safe_float(point.get("x")) - _safe_float(nearest.get("x")),
-            _safe_float(point.get("y")) - _safe_float(nearest.get("y")),
+            (_safe_float(point.get("x")) - _safe_float(nearest.get("x"))) * x_scale,
+            (_safe_float(point.get("y")) - _safe_float(nearest.get("y"))) * y_scale,
         )
         if (
             area > max_area
@@ -372,32 +382,70 @@ def _filter_track_by_wrist(
     return accepted
 
 
-def _filter_track_by_bbox(track: List[dict], *, max_area: float, max_width: float, max_height: float) -> List[dict]:
-    """Discard class predictions whose normalized box cannot represent the object."""
+def _filter_track_by_bbox(
+    track: List[dict],
+    *,
+    max_area: float,
+    max_width: float,
+    max_height: float,
+    coordinate_x_scale: float = 1.0,
+    coordinate_y_scale: float = 1.0,
+) -> List[dict]:
+    """Discard class predictions whose square-input-equivalent box is implausible."""
+    x_scale = max(1e-6, _safe_float(coordinate_x_scale, 1.0))
+    y_scale = max(1e-6, _safe_float(coordinate_y_scale, 1.0))
     return [
         point
         for point in track
         if (
             _safe_float(point.get("w")) > 0
             and _safe_float(point.get("h")) > 0
-            and _safe_float(point.get("w")) <= max_width
-            and _safe_float(point.get("h")) <= max_height
-            and _safe_float(point.get("w")) * _safe_float(point.get("h")) <= max_area
+            and _safe_float(point.get("w")) * x_scale <= max_width
+            and _safe_float(point.get("h")) * y_scale <= max_height
+            and _safe_float(point.get("w")) * x_scale * _safe_float(point.get("h")) * y_scale <= max_area
         )
     ]
 
 
-def _club_box_endpoint_track(club_track: List[dict]) -> List[dict]:
+def _square_coordinate_scales(width: Optional[float], height: Optional[float]) -> Tuple[float, float]:
+    """Return source-normalized axes expressed in the square inference space."""
+    safe_width = _safe_float(width, 0.0)
+    safe_height = _safe_float(height, 0.0)
+    longest_edge = max(safe_width, safe_height)
+    if longest_edge <= 0:
+        return 1.0, 1.0
+    return safe_width / longest_edge, safe_height / longest_edge
+
+
+def _scale_track_to_square(track: List[dict], x_scale: float, y_scale: float) -> List[dict]:
+    """Keep source coordinates for overlays, but use square-equivalent geometry for metrics."""
+    return [
+        {
+            **point,
+            "x": _safe_float(point.get("x")) * x_scale,
+            "y": _safe_float(point.get("y")) * y_scale,
+            "w": _safe_float(point.get("w")) * x_scale,
+            "h": _safe_float(point.get("h")) * y_scale,
+        }
+        for point in track
+    ]
+
+
+def _club_box_endpoint_track(
+    club_track: List[dict], coordinate_x_scale: float = 1.0, coordinate_y_scale: float = 1.0
+) -> List[dict]:
     if not club_track:
         return []
 
+    x_scale = max(1e-6, _safe_float(coordinate_x_scale, 1.0))
+    y_scale = max(1e-6, _safe_float(coordinate_y_scale, 1.0))
     candidate_tracks = ([], [])
     for point in club_track:
         x = _safe_float(point.get("x"), 0.0)
         y = _safe_float(point.get("y"), 0.0)
         w = _safe_float(point.get("w"), 0.0)
         h = _safe_float(point.get("h"), 0.0)
-        if w >= h:
+        if w * x_scale >= h * y_scale:
             endpoints = ((x - w / 2.0, y), (x + w / 2.0, y))
         else:
             endpoints = ((x, y - h / 2.0), (x, y + h / 2.0))
@@ -417,8 +465,8 @@ def _club_box_endpoint_track(club_track: List[dict]) -> List[dict]:
         speeds = _speeds(track) if len(track) >= 2 else []
         xs = [_safe_float(point.get("x"), 0.0) for point in track]
         ys = [_safe_float(point.get("y"), 0.0) for point in track]
-        x_range = max(xs) - min(xs) if xs else 0.0
-        y_range = max(ys) - min(ys) if ys else 0.0
+        x_range = (max(xs) - min(xs)) * x_scale if xs else 0.0
+        y_range = (max(ys) - min(ys)) * y_scale if ys else 0.0
         return sum(speeds) + math.hypot(x_range, y_range)
 
     return max(candidate_tracks, key=endpoint_score)
@@ -445,9 +493,15 @@ def _merge_motion_track(named_tracks: List[Tuple[str, List[dict]]]) -> List[dict
     return merged
 
 
-def _choose_motion_track(club_head_track: List[dict], handle_track: List[dict], club_track: List[dict]) -> Tuple[List[dict], str]:
+def _choose_motion_track(
+    club_head_track: List[dict],
+    handle_track: List[dict],
+    club_track: List[dict],
+    coordinate_x_scale: float = 1.0,
+    coordinate_y_scale: float = 1.0,
+) -> Tuple[List[dict], str]:
     named_tracks: List[Tuple[str, List[dict]]] = []
-    club_endpoint_track = _club_box_endpoint_track(club_track)
+    club_endpoint_track = _club_box_endpoint_track(club_track, coordinate_x_scale, coordinate_y_scale)
     if club_head_track:
         named_tracks.append(("club_head", club_head_track))
     if handle_track:
@@ -1904,6 +1958,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     fps = max(1.0, _safe_float(meta.get("fps"), 60.0))
     width = _safe_float(meta.get("width"), 0.0) or None
     height = _safe_float(meta.get("height"), 0.0) or None
+    coordinate_x_scale, coordinate_y_scale = _square_coordinate_scales(width, height)
     times_ms = _normalize_times(frames, fps, _safe_float(meta.get("durationMs"), 0.0))
     for idx, frame in enumerate(frames):
         frame["_t_ms"] = times_ms[idx] if times_ms[idx] is not None else idx * (1000.0 / fps)
@@ -1913,7 +1968,12 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     raw_club_track = _select_best_track(frames, CLUB_LABELS)
     raw_ball_track = _select_best_track(frames, BALL_LABELS)
     ball_track = _filter_track_by_bbox(
-        raw_ball_track, max_area=BALL_MAX_AREA, max_width=BALL_MAX_WIDTH, max_height=BALL_MAX_HEIGHT,
+        raw_ball_track,
+        max_area=BALL_MAX_AREA,
+        max_width=BALL_MAX_WIDTH,
+        max_height=BALL_MAX_HEIGHT,
+        coordinate_x_scale=coordinate_x_scale,
+        coordinate_y_scale=coordinate_y_scale,
     )
     person_track = _select_best_track(frames, PERSON_LABELS)
     body_artifact = _load_body_artifact(job_id, body_path)
@@ -1922,21 +1982,39 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         raw_club_head_track, wrist_track,
         max_distance=CLUB_HEAD_MAX_WRIST_DISTANCE, max_area=CLUB_HEAD_MAX_AREA,
         max_width=CLUB_HEAD_MAX_WIDTH, max_height=CLUB_HEAD_MAX_HEIGHT,
+        coordinate_x_scale=coordinate_x_scale,
+        coordinate_y_scale=coordinate_y_scale,
     )
     handle_track = _filter_track_by_wrist(
         raw_handle_track, wrist_track,
         max_distance=CLUB_HANDLE_MAX_WRIST_DISTANCE, max_area=CLUB_HANDLE_MAX_AREA,
         max_width=CLUB_HANDLE_MAX_WIDTH, max_height=CLUB_HANDLE_MAX_HEIGHT,
+        coordinate_x_scale=coordinate_x_scale,
+        coordinate_y_scale=coordinate_y_scale,
     )
     club_track = _filter_track_by_wrist(
         raw_club_track, wrist_track,
         max_distance=CLUB_BOX_MAX_WRIST_DISTANCE, max_area=CLUB_BOX_MAX_AREA,
         max_width=CLUB_BOX_MAX_WIDTH, max_height=CLUB_BOX_MAX_HEIGHT,
+        coordinate_x_scale=coordinate_x_scale,
+        coordinate_y_scale=coordinate_y_scale,
     )
     viewpoint = _normalize_viewpoint(meta.get("viewpoint") or (body_artifact or {}).get("viewpoint"))
 
-    motion_track, motion_source = _choose_motion_track(club_head_track, handle_track, club_track)
-    body_selector = select_body_events(body_artifact, motion_track)
+    # The body decoder receives source-space tracks because its pose keypoints
+    # live in that same coordinate system.  Downstream club geometry, however,
+    # is evaluated in square-input-equivalent coordinates so 2D angles and
+    # stability are not biased by portrait/landscape unletterboxing.
+    body_motion_track, _ = _choose_motion_track(
+        club_head_track, handle_track, club_track, coordinate_x_scale, coordinate_y_scale
+    )
+    body_selector = select_body_events(body_artifact, body_motion_track)
+    metric_club_head_track = _scale_track_to_square(club_head_track, coordinate_x_scale, coordinate_y_scale)
+    metric_handle_track = _scale_track_to_square(handle_track, coordinate_x_scale, coordinate_y_scale)
+    metric_club_track = _scale_track_to_square(club_track, coordinate_x_scale, coordinate_y_scale)
+    motion_track, motion_source = _choose_motion_track(
+        metric_club_head_track, metric_handle_track, metric_club_track
+    )
     use_body_selector = _body_selector_is_operational(viewpoint, body_selector)
 
     if len(motion_track) < min_points:
@@ -1958,7 +2036,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         motion_track,
         speeds,
         wrist_track,
-        club_head_track,
+        metric_club_head_track,
     )
     body_selector_events = body_selector.get("events") if isinstance(body_selector.get("events"), dict) else {}
     if use_body_selector:
@@ -1984,9 +2062,9 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         body_events=body_selector_events if use_body_selector else {},
         wrist_top=wrist_top,
         wrist_impact=wrist_impact,
-        club_head_track=club_head_track,
-        club_handle_track=handle_track,
-        club_track=club_track,
+        club_head_track=metric_club_head_track,
+        club_handle_track=metric_handle_track,
+        club_track=metric_club_track,
         body_selector_confidence=_safe_float(body_selector.get("confidence"), 0.0) if use_body_selector else 0.0,
     )
     if impact_idx is None and EVENT_FALLBACK_ENABLED:
@@ -2048,9 +2126,9 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         "score": impact_score,
     }
 
-    shaft_samples = _shaft_samples(club_head_track, handle_track, fps)
+    shaft_samples = _shaft_samples(metric_club_head_track, metric_handle_track, fps)
     if not shaft_samples:
-        shaft_samples = _club_box_shaft_samples(club_track)
+        shaft_samples = _club_box_shaft_samples(metric_club_track)
     shaft = _shaft_plane(shaft_samples, address_ms, top_ms, impact_ms)
     backswing = _backswing_metric(
         motion_track,
@@ -2072,7 +2150,13 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         "clubHandleRejectedFrames": max(0, len(raw_handle_track) - len(handle_track)),
         "clubRejectedFrames": max(0, len(raw_club_track) - len(club_track)),
         "ballRejectedFrames": max(0, len(raw_ball_track) - len(ball_track)),
-        "clubFilter": "pose_wrist_geometry_v2",
+        "clubFilter": "pose_wrist_geometry_v3_square_equivalent",
+        "coordinateGeometry": {
+            "sourceWidth": width,
+            "sourceHeight": height,
+            "squareXScale": round(coordinate_x_scale, 4),
+            "squareYScale": round(coordinate_y_scale, 4),
+        },
         "observationTiers": {
             "clubHead": {
                 "status": "confirmed" if len(club_head_track) >= 4 else "reference" if club_head_track else "rejected" if raw_club_head_track else "absent",

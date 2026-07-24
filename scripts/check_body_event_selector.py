@@ -441,6 +441,44 @@ def test_wrist_gate_rejects_static_background_club_candidate() -> None:
         raise AssertionError("person-sized ball box must not become a ball track")
 
 
+def test_wrist_gate_uses_square_equivalent_geometry_for_portrait_meta() -> None:
+    wrists = [{"frame": 10, "x": 0.52, "y": 0.50}]
+    # This is a valid 0.18-wide square-input candidate after a 9:16 source
+    # frame was unletterboxed.  Its source-normalized width is 0.32, so applying
+    # a square threshold directly would reject it solely due to coordinate space.
+    portrait_candidate = [{"frame": 10, "x": 0.84, "y": 0.50, "w": 0.32, "h": 0.08, "conf": 0.7}]
+    if _filter_track_by_wrist(
+        portrait_candidate,
+        wrists,
+        max_distance=0.22,
+        max_area=0.02,
+        max_width=0.22,
+        max_height=0.18,
+    ):
+        raise AssertionError("fixture must demonstrate the old source-space rejection")
+    corrected = _filter_track_by_wrist(
+        portrait_candidate,
+        wrists,
+        max_distance=0.22,
+        max_area=0.02,
+        max_width=0.22,
+        max_height=0.18,
+        coordinate_x_scale=9 / 16,
+        coordinate_y_scale=1.0,
+    )
+    if len(corrected) != 1:
+        raise AssertionError(f"portrait candidate must pass in square-equivalent geometry, got {corrected}")
+    if not _filter_track_by_bbox(
+        [{"w": 0.32, "h": 0.03}],
+        max_area=0.012,
+        max_width=0.18,
+        max_height=0.14,
+        coordinate_x_scale=9 / 16,
+        coordinate_y_scale=1.0,
+    ):
+        raise AssertionError("portrait bbox must use square-equivalent width")
+
+
 def test_point_only_impact_stability_does_not_fail_fusion() -> None:
     point_track = [
         {"t": 0, "x": 0.50, "y": 0.50, "conf": 0.9},
@@ -468,5 +506,6 @@ if __name__ == "__main__":
     test_quality_withheld_result_is_still_complete()
     test_meta_timeline_prefers_video_frame_clock_over_inference_clock()
     test_wrist_gate_rejects_static_background_club_candidate()
+    test_wrist_gate_uses_square_equivalent_geometry_for_portrait_meta()
     test_point_only_impact_stability_does_not_fail_fusion()
     print("body event selector checks passed")
