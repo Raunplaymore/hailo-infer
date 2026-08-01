@@ -7,10 +7,10 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from app.services.body_event_selector import select_body_events
 from app.services.coach_commentary import build_coach_comments, build_coach_finding_debug
 
-# v14 changes metric semantics: observations, derived values, and validated
-# coaching claims are gated independently. Bump the version so Pi caches never
-# present an ungated v13 result as if it were current.
-COACH_ANALYSIS_VERSION = "hailo-coach-service7-v14"
+# v15 adds a separate sustained-motion Takeaway event.  Tempo must begin at
+# the first observable backswing movement, not at the first frame of setup.
+# Bump the version so Pi caches are recomputed with the corrected time origin.
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v15"
 
 SERVICE7_LABELS = {
     0: "person",
@@ -854,6 +854,59 @@ def _find_address_index(track: List[dict], speeds: List[float]) -> Optional[int]
     return best_idx
 
 
+def _find_takeaway_index(
+    track: List[dict], speeds: List[float], address_idx: int, top_idx: int
+) -> int:
+    """Find the first sustained backswing motion after Address.
+
+    Address deliberately represents the stable setup posture and may be near
+    frame zero.  Takeaway is separate: it needs both a meaningful displacement
+    from that setup and continued movement on the following sample.  Thresholds
+    are relative to the observed track, so this works for normalized and pixel
+    coordinates without pretending a clipped setup has a precise start.
+    """
+    if len(track) < 3 or not speeds:
+        return address_idx
+    start = max(0, min(address_idx, len(track) - 1))
+    end = max(start, min(top_idx, len(track) - 1))
+    if end - start < 2:
+        return start
+
+    address_time = _safe_float(track[start].get("t"), 0.0)
+    baseline_end = min(end, start + 3)
+    for idx in range(start + 1, end + 1):
+        if _safe_float(track[idx].get("t"), address_time) - address_time > 120.0:
+            baseline_end = max(start + 1, idx - 1)
+            break
+    baseline = track[start : baseline_end + 1]
+    baseline_x = _median([_safe_float(point.get("x"), 0.0) for point in baseline])
+    baseline_y = _median([_safe_float(point.get("y"), 0.0) for point in baseline])
+    scale = _coord_scale(track[start : end + 1])
+    baseline_speeds = speeds[start : baseline_end + 1]
+    speed_threshold = max(_median(baseline_speeds) * 2.5, scale * 0.006, 1e-6)
+    displacement_threshold = max(scale * 0.04, _median(baseline_speeds) * 3.0, 1e-6)
+
+    for idx in range(baseline_end + 1, end):
+        point = track[idx]
+        displacement = math.hypot(
+            _safe_float(point.get("x"), 0.0) - baseline_x,
+            _safe_float(point.get("y"), 0.0) - baseline_y,
+        )
+        next_point = track[idx + 1]
+        next_displacement = math.hypot(
+            _safe_float(next_point.get("x"), 0.0) - baseline_x,
+            _safe_float(next_point.get("y"), 0.0) - baseline_y,
+        )
+        sustained_speed = max(speeds[idx], speeds[idx + 1]) >= speed_threshold
+        sustained_displacement = (
+            displacement >= displacement_threshold
+            and next_displacement >= displacement_threshold
+        )
+        if sustained_speed and sustained_displacement:
+            return idx
+    return start
+
+
 def _find_top_after_address(track: List[dict], address_idx: int) -> Optional[int]:
     if len(track) < 3:
         return None
@@ -1305,8 +1358,8 @@ def _find_top(track: List[dict], impact_idx: int) -> Optional[int]:
     return _argmax(xs) if dx >= 0 else _argmin(xs)
 
 
-def _tempo(address_ms: int, top_ms: int, impact_ms: int) -> Tuple[int, int, float]:
-    backswing = max(0, top_ms - address_ms)
+def _tempo(takeaway_ms: int, top_ms: int, impact_ms: int) -> Tuple[int, int, float]:
+    backswing = max(0, top_ms - takeaway_ms)
     downswing = max(1, impact_ms - top_ms)
     ratio = round(backswing / float(downswing), 2)
     return backswing, downswing, ratio
@@ -1400,6 +1453,7 @@ def _validate_event_evidence(
     )
     event_quality = {
         "address": {"status": pose_quality, "confidence": round(_clamp(body_selector_confidence), 2), "source": "pose_phase_decoder"},
+        "takeaway": {"status": pose_quality, "confidence": round(_clamp(body_selector_confidence), 2), "source": "sustained_motion_after_address"},
         "top": {"status": pose_quality, "confidence": round(_clamp(body_selector_confidence), 2), "source": "pose_phase_decoder"},
         "impact": {
             "status": impact_quality,
@@ -2203,10 +2257,14 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     if finish_idx <= impact_idx:
         finish_idx = len(motion_track) - 1
 
+    takeaway_idx = _find_takeaway_index(motion_track, speeds, address_idx, top_idx)
+    takeaway_idx = min(max(address_idx, takeaway_idx), top_idx)
+
     address_ms = _safe_int(motion_track[address_idx].get("t"), address_idx * (1000 // fps))
     top_ms = _safe_int(motion_track[top_idx].get("t"), top_idx * (1000 // fps))
     impact_ms = _safe_int(motion_track[impact_idx].get("t"), impact_idx * (1000 // fps))
     finish_ms = _safe_int(motion_track[finish_idx].get("t"), finish_idx * (1000 // fps))
+    takeaway_ms = _safe_int(motion_track[takeaway_idx].get("t"), takeaway_idx * (1000 // fps))
     if use_body_selector:
         address_ms = _safe_int(body_selector_events.get("addressMs"), address_ms)
         top_ms = _safe_int(body_selector_events.get("topMs"), top_ms)
@@ -2223,7 +2281,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         "source": motion_source,
     }
 
-    backswing_ms, downswing_ms, ratio = _tempo(address_ms, top_ms, impact_ms)
+    backswing_ms, downswing_ms, ratio = _tempo(takeaway_ms, top_ms, impact_ms)
     tempo = {
         "backswingMs": backswing_ms,
         "downswingMs": downswing_ms,
@@ -2374,7 +2432,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         suppress_redundant=True,
     )
 
-    tempo = {**tempo, "status": metric_evidence["tempo"]["status"], "comment": "백스윙/다운스윙 구간의 관측 시간 비율이며 전환 순서를 직접 증명하지 않습니다."}
+    tempo = {**tempo, "status": metric_evidence["tempo"]["status"], "comment": "Takeaway부터 Top까지의 백스윙과 Top부터 Impact까지의 관측 시간 비율이며 전환 순서를 직접 증명하지 않습니다."}
     if metric_evidence["path"]["status"] == "withheld":
         swing_plane = {
             "label": "withheld",
@@ -2485,6 +2543,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
         "errorMessage": None,
         "events": {
             "addressMs": visible_event("address", address_ms),
+            "takeawayMs": visible_event("takeaway", takeaway_ms),
             "topMs": visible_event("top", top_ms),
             "impactMs": visible_event("impact", impact_ms),
             "finishMs": visible_event("finish", finish_ms),
@@ -2502,6 +2561,7 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
             "fusion": fusion_metrics,
             "eventTiming": {
                 "address": visible_event("address", address_ms),
+                "takeaway": visible_event("takeaway", takeaway_ms),
                 "top": visible_event("top", top_ms),
                 "impact": visible_event("impact", impact_ms),
                 "finish": visible_event("finish", finish_ms),

@@ -57,6 +57,7 @@ def _run_job(job_id: str, payload: JobCreateRequest) -> None:
             "errorMessage": error_message,
             "events": {
                 "addressMs": None,
+                "takeawayMs": None,
                 "topMs": None,
                 "impactMs": None,
                 "finishMs": None,
@@ -83,6 +84,7 @@ def _run_job(job_id: str, payload: JobCreateRequest) -> None:
             "errorMessage": error_message,
             "events": {
                 "addressMs": None,
+                "takeawayMs": None,
                 "topMs": None,
                 "impactMs": None,
                 "finishMs": None,
@@ -216,6 +218,7 @@ def result(job_id: str) -> dict:
         "errorMessage": info.error_message,
         "events": {
             "addressMs": None,
+            "takeawayMs": None,
             "topMs": None,
             "impactMs": None,
             "finishMs": None,

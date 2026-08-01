@@ -22,7 +22,7 @@ def is_complete_coach_result(result: dict[str, Any] | None, analysis_version: st
         return False
     has_event = any(
         events.get(key) is not None
-        for key in ("addressMs", "topMs", "impactMs", "finishMs", "address", "top", "impact", "finish")
+        for key in ("addressMs", "takeawayMs", "topMs", "impactMs", "finishMs", "address", "takeaway", "top", "impact", "finish")
     )
     event_validation = result.get("eventValidation") if isinstance(result.get("eventValidation"), dict) else {}
     events_withheld_for_quality = event_validation.get("status") == "withheld"

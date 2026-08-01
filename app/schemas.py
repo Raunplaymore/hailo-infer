@@ -44,6 +44,7 @@ class HealthResponse(BaseModel):
 
 class Events(BaseModel):
     addressMs: Optional[int]
+    takeawayMs: Optional[int] = None
     topMs: Optional[int]
     impactMs: Optional[int]
     finishMs: Optional[int]
@@ -114,6 +115,7 @@ class BallMetric(BaseModel):
 
 class EventTimingMetric(BaseModel):
     address: Optional[int] = None
+    takeaway: Optional[int] = None
     top: Optional[int] = None
     impact: Optional[int] = None
     finish: Optional[int] = None

@@ -22,6 +22,7 @@ from app.services.swing_phase_decoder import MIN_PHASE_MS, decode_swing_phases  
 from app.services.coach_pipeline import (  # noqa: E402
     _body_selector_is_operational,
     _filter_track_by_bbox,
+    _find_takeaway_index,
     _filter_track_by_wrist,
     _impact_stability,
     _refine_late_body_impact,
@@ -490,6 +491,24 @@ def test_point_only_impact_stability_does_not_fail_fusion() -> None:
         raise AssertionError(f"point-only impact stability must remain conservative, got {(label, score)}")
 
 
+def test_takeaway_requires_sustained_motion_after_address() -> None:
+    track = [
+        {"t": 0, "x": 0.500, "y": 0.500, "conf": 0.9},
+        {"t": 33, "x": 0.501, "y": 0.500, "conf": 0.9},
+        {"t": 66, "x": 0.500, "y": 0.501, "conf": 0.9},
+        {"t": 99, "x": 0.503, "y": 0.500, "conf": 0.9},
+        {"t": 132, "x": 0.530, "y": 0.486, "conf": 0.9},
+        {"t": 165, "x": 0.566, "y": 0.463, "conf": 0.9},
+        {"t": 198, "x": 0.610, "y": 0.438, "conf": 0.9},
+    ]
+    speeds = [0.0]
+    for previous, current in zip(track, track[1:]):
+        speeds.append(((current["x"] - previous["x"]) ** 2 + (current["y"] - previous["y"]) ** 2) ** 0.5)
+    takeaway = _find_takeaway_index(track, speeds, address_idx=0, top_idx=6)
+    if takeaway != 4:
+        raise AssertionError(f"takeaway must skip setup jitter and start at sustained motion, got index={takeaway}")
+
+
 if __name__ == "__main__":
     test_state_machine_rejects_unrefined_early_top()
     test_state_machine_accepts_refined_compact_top()
@@ -508,4 +527,5 @@ if __name__ == "__main__":
     test_wrist_gate_rejects_static_background_club_candidate()
     test_wrist_gate_uses_square_equivalent_geometry_for_portrait_meta()
     test_point_only_impact_stability_does_not_fail_fusion()
+    test_takeaway_requires_sustained_motion_after_address()
     print("body event selector checks passed")
