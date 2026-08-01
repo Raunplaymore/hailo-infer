@@ -119,14 +119,6 @@ def main() -> int:
         job_id = str(annotation.get("jobId") or path.stem)
         body = load_json(body_dir / f"{job_id}.json")
         new_address, method = address_seed(body, legacy_address)
-        if new_address is None:
-            audit.append({
-                "jobId": job_id,
-                "status": "needs_manual_address",
-                "legacyAddress": legacy_address,
-                "reason": method,
-            })
-            continue
         annotation["schemaVersion"] = "swing-tracking-label-v2"
         annotation["events"] = {
             "address": new_address,
@@ -137,18 +129,21 @@ def main() -> int:
         }
         annotation["status"] = "draft"
         changes.append((path, annotation))
-        audit.append({
+        audit_item = {
             "jobId": job_id,
-            "status": "migrated",
-            "method": method,
+            "status": "migrated" if new_address is not None else "needs_manual_address",
+            "method": method if new_address is not None else None,
+            "reason": method if new_address is None else None,
             "address": new_address,
             "takeaway": legacy_address,
-        })
+        }
+        audit.append({key: value for key, value in audit_item.items() if value is not None})
 
     report = {
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "total": len(files),
-        "migrated": len(changes),
+        "migrated": sum(item.get("status") == "migrated" for item in audit),
+        "takeawayMigrated": len(changes),
         "needsManualAddress": sum(item.get("status") == "needs_manual_address" for item in audit),
         "skipped": sum(item.get("status") == "skipped" for item in audit),
         "items": audit,
