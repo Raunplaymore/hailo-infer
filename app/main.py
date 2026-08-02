@@ -163,6 +163,7 @@ def analyze_club_sidecar(payload: ClubSidecarRequest) -> ClubSidecarResponse:
                 job_id=payload.jobId,
                 force=False,
                 body_path=payload.bodyPath,
+                takeaway_profile=payload.takeawayProfile,
             ),
         )
     except (CoachError, MetaLoadError) as exc:

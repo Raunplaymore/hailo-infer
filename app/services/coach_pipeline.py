@@ -50,6 +50,12 @@ CLUB_BOX_MAX_HEIGHT = 0.22
 BALL_MAX_AREA = 0.012
 BALL_MAX_WIDTH = 0.14
 BALL_MAX_HEIGHT = 0.14
+TAKEAWAY_PROFILES = {
+    "default": {"speed_multiplier": 2.5, "displacement_ratio": 0.04},
+    # Selected on V2-73 train/validation only; test is held out in
+    # scripts/tune_dtl_v2_takeaway.py. This profile is sidecar-only.
+    "dtl_v2_73_r1": {"speed_multiplier": 1.5, "displacement_ratio": 0.015},
+}
 
 
 class CoachError(Exception):
@@ -855,7 +861,12 @@ def _find_address_index(track: List[dict], speeds: List[float]) -> Optional[int]
 
 
 def _find_takeaway_index(
-    track: List[dict], speeds: List[float], address_idx: int, top_idx: int
+    track: List[dict],
+    speeds: List[float],
+    address_idx: int,
+    top_idx: int,
+    speed_multiplier: float = TAKEAWAY_PROFILES["default"]["speed_multiplier"],
+    displacement_ratio: float = TAKEAWAY_PROFILES["default"]["displacement_ratio"],
 ) -> int:
     """Find the first sustained backswing motion after Address.
 
@@ -883,8 +894,8 @@ def _find_takeaway_index(
     baseline_y = _median([_safe_float(point.get("y"), 0.0) for point in baseline])
     scale = _coord_scale(track[start : end + 1])
     baseline_speeds = speeds[start : baseline_end + 1]
-    speed_threshold = max(_median(baseline_speeds) * 2.5, scale * 0.006, 1e-6)
-    displacement_threshold = max(scale * 0.04, _median(baseline_speeds) * 3.0, 1e-6)
+    speed_threshold = max(_median(baseline_speeds) * speed_multiplier, scale * 0.006, 1e-6)
+    displacement_threshold = max(scale * displacement_ratio, _median(baseline_speeds) * 3.0, 1e-6)
 
     for idx in range(baseline_end + 1, end):
         point = track[idx]
@@ -2112,7 +2123,13 @@ def _coach_comments(
     )
 
 
-def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: Optional[str] = None) -> Dict[str, object]:
+def analyze_meta(
+    meta: Dict[str, object],
+    job_id: str,
+    force: bool,
+    body_path: Optional[str] = None,
+    takeaway_profile: Optional[str] = None,
+) -> Dict[str, object]:
     frames = meta.get("frames", [])
     if not isinstance(frames, list) or not frames:
         raise CoachError("NOT_SWING", "meta frames missing")
@@ -2257,7 +2274,16 @@ def analyze_meta(meta: Dict[str, object], job_id: str, force: bool, body_path: O
     if finish_idx <= impact_idx:
         finish_idx = len(motion_track) - 1
 
-    takeaway_idx = _find_takeaway_index(motion_track, speeds, address_idx, top_idx)
+    profile_name = takeaway_profile if takeaway_profile in TAKEAWAY_PROFILES else "default"
+    takeaway_config = TAKEAWAY_PROFILES[profile_name]
+    takeaway_idx = _find_takeaway_index(
+        motion_track,
+        speeds,
+        address_idx,
+        top_idx,
+        speed_multiplier=takeaway_config["speed_multiplier"],
+        displacement_ratio=takeaway_config["displacement_ratio"],
+    )
     takeaway_idx = min(max(address_idx, takeaway_idx), top_idx)
 
     address_ms = _safe_int(motion_track[address_idx].get("t"), address_idx * (1000 // fps))

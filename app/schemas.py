@@ -231,6 +231,7 @@ class ClubSidecarRequest(BaseModel):
     jobId: str
     metaPath: str
     bodyPath: Optional[str] = None
+    takeawayProfile: Optional[str] = None
 
 
 class ClubSidecarResponse(BaseModel):
