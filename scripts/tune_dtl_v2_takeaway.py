@@ -11,9 +11,17 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Tuple
+
+# Running a file inside `scripts/` makes that directory the initial import
+# root. Add the repository root explicitly so this works on the Pi as well as
+# from a local checkout.
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from app.services import coach_pipeline
 from app.services.meta_loader import load_meta
