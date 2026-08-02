@@ -2613,6 +2613,8 @@ def analyze_meta(
             "points": float(len(motion_track)),
             "motionSource": motion_source,
             "eventSource": event_source,
+            "takeawayProfile": profile_name,
+            "takeawayProfileConfig": takeaway_config,
             "viewpoint": viewpoint or "unknown",
             "bodySelectorMethod": body_selector.get("method") if body_selector.get("available") else None,
             "bodySelectorUsed": bool(use_body_selector),
