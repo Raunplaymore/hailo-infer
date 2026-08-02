@@ -124,8 +124,13 @@ def score(errors: Iterable[float]) -> Dict[str, Any]:
     }
 
 
-def evaluate(records: List[Dict[str, Any]], speed_multiplier: float, displacement_ratio: float) -> Dict[str, Dict[str, Any]]:
-    errors: Dict[str, List[float]] = {"train": [], "val": [], "test": []}
+def evaluate(
+    records: List[Dict[str, Any]],
+    speed_multiplier: float,
+    displacement_ratio: float,
+    splits: Tuple[str, ...] = ("train", "val", "test"),
+) -> Dict[str, Dict[str, Any]]:
+    errors: Dict[str, List[float]] = {split: [] for split in splits}
     with patched_takeaway_detector(speed_multiplier, displacement_ratio):
         for record in records:
             try:
@@ -152,10 +157,12 @@ def main() -> None:
     if not records:
         raise SystemExit("no completed V2 sidecars with labelled Takeaway events")
 
+    tuning_records = [record for record in records if record["split"] in {"train", "val"}]
+    test_records = [record for record in records if record["split"] == "test"]
     candidates = []
     for speed_multiplier in SPEED_MULTIPLIERS:
         for displacement_ratio in DISPLACEMENT_RATIOS:
-            result = evaluate(records, speed_multiplier, displacement_ratio)
+            result = evaluate(tuning_records, speed_multiplier, displacement_ratio, ("train", "val"))
             candidates.append({
                 "speedMultiplier": speed_multiplier,
                 "displacementRatio": displacement_ratio,
@@ -173,11 +180,19 @@ def main() -> None:
         item["scores"]["val"]["maeMs"] if item["scores"]["val"]["maeMs"] is not None else float("inf"),
         -(item["scores"]["val"]["within100MsRate"] or 0),
     ))
+    # Test is deliberately evaluated only once, after all tuning choices are
+    # frozen from train/validation results.
+    selected_test = evaluate(
+        test_records,
+        selected["speedMultiplier"],
+        selected["displacementRatio"],
+        ("test",),
+    )["test"]
     print(json.dumps({
         "records": {split: sum(record["split"] == split for record in records) for split in ("train", "val", "test")},
         "productionBaseline": {"speedMultiplier": 2.5, "displacementRatio": 0.04},
         "finalists": finalists,
-        "selected": selected,
+        "selected": {**selected, "test": selected_test},
     }, ensure_ascii=False, indent=2))
 
 
