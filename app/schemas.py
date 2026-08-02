@@ -223,3 +223,17 @@ class ClubPreprocessLabResponse(BaseModel):
     labOnly: bool = True
     report: Dict[str, Any]
     scorePath: str
+
+
+class ClubSidecarRequest(BaseModel):
+    """A separate club-only pass that must not replace the primary job result."""
+
+    jobId: str
+    metaPath: str
+    bodyPath: Optional[str] = None
+
+
+class ClubSidecarResponse(BaseModel):
+    ok: bool
+    jobId: str
+    result: Dict[str, Any]

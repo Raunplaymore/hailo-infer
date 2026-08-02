@@ -4,6 +4,8 @@ from app.core.config import Settings
 from app.schemas import (
     BodyVideoRequest,
     BodyVideoResponse,
+    ClubSidecarRequest,
+    ClubSidecarResponse,
     ClubPreprocessLabRequest,
     ClubPreprocessLabResponse,
     HealthResponse,
@@ -147,6 +149,28 @@ def create_club_preprocess_lab(payload: ClubPreprocessLabRequest) -> ClubPreproc
         )
     except ClubPreprocessLabError as exc:
         raise HTTPException(status_code=400, detail={"ok": False, "error": str(exc)}) from exc
+
+
+@app.post("/v1/club-sidecar/from-meta", response_model=ClubSidecarResponse)
+def analyze_club_sidecar(payload: ClubSidecarRequest) -> ClubSidecarResponse:
+    """Analyze V2 club-only metadata without writing or replacing a primary job."""
+    try:
+        return ClubSidecarResponse(
+            ok=True,
+            jobId=payload.jobId,
+            result=analyze_meta(
+                load_meta(payload.metaPath),
+                job_id=payload.jobId,
+                force=False,
+                body_path=payload.bodyPath,
+            ),
+        )
+    except (CoachError, MetaLoadError) as exc:
+        error_code = exc.code if isinstance(exc, CoachError) else "META_LOAD_FAILED"
+        raise HTTPException(
+            status_code=400,
+            detail={"ok": False, "jobId": payload.jobId, "errorCode": error_code, "error": str(exc)},
+        ) from exc
 
 
 @app.post("/v1/jobs", response_model=JobCreateResponse)
