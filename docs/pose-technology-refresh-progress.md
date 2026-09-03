@@ -33,7 +33,7 @@
 | M7-NODE | 필수 | Node 지원 LTS 전환 | Pending | Pi Node 18.20.4, npm 없음; hailo-back/front 별도 repo 작업 필요 | 미배포 |
 | M7-HAILO | 필수 | Hailo compatibility matrix | Completed | Hailo-8 firmware/runtime/driver 4.23.0, TAPPAS 3.31 고정 | 문서만 |
 | M8 | 필수 | metric quality contract | Completed | top-level contract + nullable withheld schema, clean Pi integration PASS | 미배포 |
-| M9 | 필수 | 코칭 유용성·범위 분리 | In progress | reference 후보 회귀 검사, API/UI 빌드 | 로컬 구현 완료·미배포 |
+| M9 | 필수 | 코칭 유용성·범위 분리 | Completed | Pi production smoke v16 + reference/scope 분리 | 배포 완료 |
 | O1 | 옵션 | Hailo YOLOv8m Pose | Pending | 동일 corpus benchmark 필요 | 미배포 |
 | O2 | 옵션 | MediaPipe Task API | Pending | legacy side-by-side 필요 | 미배포 |
 | O3 | 옵션 | RTMPose/RTMW reference | Pending | offline accuracy report 필요 | 미배포 |
@@ -145,7 +145,14 @@
   - high-density temporal pose는 아직 구현하지 않음
   - reference body 값 자체는 결과에 남지만 사용자 교정 finding으로 승격되지 않음
 - rollback: M1/M2 코드 변경만 revert 가능
-- 배포 상태: 미배포
+- 배포 상태: 완료
+- 배포 commit: `2d074f4`
+- GitHub Actions: `33728494752` success
+- production smoke: `deploy-smoke-coaching-v16-20260903` succeeded
+- sibling 배포:
+  - hailo-camera `072f021`, Actions `33728632347` success
+  - hailo-back `0df0278`, Actions `33728818299` success
+  - hailo-front `a658682`, Actions `33728946438` success
 
 ### 2026-09-03 — M9 production rollout 준비
 
