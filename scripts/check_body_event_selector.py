@@ -28,6 +28,8 @@ from app.services.coach_pipeline import (  # noqa: E402
     _refine_late_body_impact,
     _normalize_times,
     _validate_event_evidence,
+    _visible_grip_track,
+    _wrist_track_from_body,
 )
 from app.services.result_completion import is_complete_coach_result  # noqa: E402
 
@@ -509,6 +511,101 @@ def test_takeaway_requires_sustained_motion_after_address() -> None:
         raise AssertionError(f"takeaway must skip setup jitter and start at sustained motion, got index={takeaway}")
 
 
+def test_limited_pose_track_withholds_event_dependent_metrics() -> None:
+    evidence = _validate_event_evidence(
+        body_events={"topMs": 1000, "impactMs": 1300},
+        wrist_top={"t": 1000},
+        wrist_impact={"t": 1300},
+        club_head_track=[
+            {"frame": 38, "t": 1260, "conf": 0.8},
+            {"frame": 39, "t": 1290, "conf": 0.8},
+            {"frame": 40, "t": 1320, "conf": 0.8},
+            {"frame": 41, "t": 1350, "conf": 0.8},
+        ],
+        body_selector_confidence=0.9,
+        pose_track_quality={"label": "limited", "score": 0.67},
+    )
+    if evidence.get("status") != "withheld":
+        raise AssertionError(f"limited pose track must withhold event-dependent metrics, got {evidence}")
+    if "POSE_TRACK_QUALITY_LIMITED" not in evidence.get("codes", []):
+        raise AssertionError(f"limited pose reason must be traceable, got {evidence}")
+    if any(value != "withheld" for value in evidence.get("metricAvailability", {}).values()):
+        raise AssertionError(f"limited pose must withhold every event-dependent metric, got {evidence}")
+
+
+def test_hidden_side_wrist_does_not_withhold_independent_metrics() -> None:
+    good = {"usableCoverage": 1.0, "maxGapFrames": 0}
+    hidden = {"usableCoverage": 0.67, "maxGapFrames": 33}
+    evidence = _validate_event_evidence(
+        body_events={"topMs": 1000, "impactMs": 1300},
+        wrist_top={"t": 1000},
+        wrist_impact={"t": 1300},
+        club_head_track=[
+            {"frame": 38, "t": 1260, "conf": 0.8},
+            {"frame": 39, "t": 1290, "conf": 0.8},
+            {"frame": 40, "t": 1320, "conf": 0.8},
+            {"frame": 41, "t": 1350, "conf": 0.8},
+        ],
+        body_selector_confidence=0.9,
+        pose_track_quality={
+            "label": "limited",
+            "joints": {
+                "left_shoulder": good,
+                "right_shoulder": good,
+                "left_hip": good,
+                "right_hip": good,
+                "left_wrist": hidden,
+                "right_wrist": good,
+            },
+        },
+    )
+    if evidence.get("status") != "usable":
+        raise AssertionError(f"one visible wrist plus body and club evidence should remain usable: {evidence}")
+    if "POSE_TRACK_PARTIAL" not in evidence.get("warnings", []):
+        raise AssertionError(f"hidden-side limitation must remain traceable: {evidence}")
+    capabilities = evidence.get("poseCapabilities", {})
+    if not capabilities.get("eventPose") or not capabilities.get("bodyTurn"):
+        raise AssertionError(f"independent pose capabilities should remain usable: {capabilities}")
+    if capabilities.get("twoHand"):
+        raise AssertionError(f"two-hand capability must remain withheld: {capabilities}")
+
+
+def test_visible_grip_uses_wrist_and_nearby_handle_without_occluded_invention() -> None:
+    wrists = [
+        {"frame": 10, "t": 330.0, "x": 0.50, "y": 0.50, "conf": 0.8, "wristSource": "right_wrist"},
+        {"frame": 13, "t": 430.0, "x": 0.52, "y": 0.48, "conf": 0.8, "wristSource": "right_wrist"},
+    ]
+    handles = [
+        {"frame": 10, "t": 332.0, "x": 0.53, "y": 0.49, "conf": 0.7},
+        {"frame": 90, "t": 2900.0, "x": 0.1, "y": 0.1, "conf": 0.9},
+    ]
+    grip = _visible_grip_track(wrists, handles)
+    if len(grip) != len(wrists):
+        raise AssertionError(f"visible grip must not invent points for long gaps: {grip}")
+    if grip[0].get("source") != "visible_wrist_club_handle":
+        raise AssertionError(f"nearby handle should corroborate visible wrist: {grip[0]}")
+    if grip[1].get("source") != "visible_wrist":
+        raise AssertionError(f"distant handle must not alter visible wrist: {grip[1]}")
+
+
+def test_visible_wrist_lock_prevents_left_right_identity_switching() -> None:
+    frames = []
+    for index in range(6):
+        frames.append(
+            {
+                "frameIndex": index,
+                "timeMs": index * 33,
+                "keypoints": {
+                    "left_wrist": [0.4, 0.5, 0.95 if index >= 4 else 0.3],
+                    "right_wrist": [0.6, 0.5, 0.8],
+                },
+            }
+        )
+    locked = _wrist_track_from_body({"frames": frames}, lock_visible_side=True)
+    if {point.get("wristSource") for point in locked} != {"right_wrist"}:
+        raise AssertionError(f"visible-side lock must keep one wrist identity: {locked}")
+
+
 if __name__ == "__main__":
     test_state_machine_rejects_unrefined_early_top()
     test_state_machine_accepts_refined_compact_top()
@@ -528,4 +625,8 @@ if __name__ == "__main__":
     test_wrist_gate_uses_square_equivalent_geometry_for_portrait_meta()
     test_point_only_impact_stability_does_not_fail_fusion()
     test_takeaway_requires_sustained_motion_after_address()
+    test_limited_pose_track_withholds_event_dependent_metrics()
+    test_hidden_side_wrist_does_not_withhold_independent_metrics()
+    test_visible_grip_uses_wrist_and_nearby_handle_without_occluded_invention()
+    test_visible_wrist_lock_prevents_left_right_identity_switching()
     print("body event selector checks passed")

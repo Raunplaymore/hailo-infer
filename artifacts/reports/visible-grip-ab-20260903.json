@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "visible-grip-ab-v1",
+  "date": "2026-09-03",
+  "candidateFlag": "VISIBLE_GRIP_TRACK_ENABLED=1",
+  "sample": {
+    "recentMetaBodyPairs": 30,
+    "analyzed": 30,
+    "errors": 0
+  },
+  "result": {
+    "eventChanges": 0,
+    "validationStatusChanges": 0,
+    "dominantWristIdentityLocked": 30,
+    "handleCorroborated": 29
+  },
+  "policy": {
+    "hiddenWristReconstruction": false,
+    "longGapInterpolation": false,
+    "handleChangesWristCoordinates": false,
+    "twoHandMetricsRequireBothWrists": true
+  },
+  "rollback": "Unset VISIBLE_GRIP_TRACK_ENABLED or set it to 0"
+}

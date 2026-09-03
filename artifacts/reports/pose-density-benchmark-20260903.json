@@ -1,0 +1,55 @@
+{
+  "schemaVersion": "pose-density-benchmark-v1",
+  "date": "2026-09-03",
+  "device": "Raspberry Pi 5 16GB",
+  "candidatePath": "/home/ray/hailo-infer-candidates/pose-refresh-r1",
+  "input": {
+    "filename": "IMG_5755.mov",
+    "frameCount": 197,
+    "sourceFps": 60.12
+  },
+  "legacy": {
+    "targetFps": 0,
+    "sampleStride": 8,
+    "effectiveSampleFps": 7.515,
+    "sampledFrames": 25,
+    "elapsedSeconds": 6.303,
+    "temperatureBeforeC": 50.5,
+    "temperatureAfterC": 54.3,
+    "throttled": "0x0"
+  },
+  "dense30": {
+    "targetFps": 30,
+    "sampleStride": 2,
+    "effectiveSampleFps": 30.061,
+    "sampledFrames": 99,
+    "elapsedSeconds": [14.487, 14.438, 14.584],
+    "temperatureAfterMaxC": 56.5,
+    "throttled": "0x0",
+    "repeatPayloadIdentical": true,
+    "repeatPayloadSha256": "a375d4df9a8b54ade880b87a0e263ae6d44a12ed631c1e418729c7b5c1487084",
+    "poseTrackQuality": {
+      "label": "limited",
+      "coreCoverage": 0.666667,
+      "leftWristCoverage": 0.666667,
+      "leftWristMaxGapFrames": 33,
+      "leftWristMaxGapMs": 1098,
+      "leftElbowCoverage": 0.656566,
+      "leftElbowMaxGapFrames": 34,
+      "leftElbowMaxGapMs": 1131,
+      "shoulderHipRightWristCoverage": 1.0
+    }
+  },
+  "decision": {
+    "status": "validating",
+    "accepted": [
+      "configurable target FPS with legacy default",
+      "sampling and track-quality observability",
+      "candidate-only 30fps benchmark"
+    ],
+    "blocked": [
+      "production enablement until hidden-side wrist coverage is handled",
+      "long-gap interpolation"
+    ]
+  }
+}

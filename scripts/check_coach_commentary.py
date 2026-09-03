@@ -224,18 +224,37 @@ def run_stuck_inside_release_case() -> None:
 
 
 def run_body_pose_case() -> None:
-    body_metrics = {
+    reference_body_metrics = {
         "headStability": {
             "label": "unstable",
+            "status": "reference",
             "movementRatio": 0.58,
             "confidence": 0.82,
         },
         "shoulderTurnProxy": {
             "label": "limited",
+            "status": "reference",
             "deltaDeg": 4.2,
             "confidence": 0.48,
         },
     }
+    confirmed_body_metrics = {
+        key: {**value, "status": "confirmed"}
+        for key, value in reference_body_metrics.items()
+    }
+    reference_debug = build_coach_finding_debug(
+        {"backswingMs": 430, "downswingMs": 140, "ratio": 3.07},
+        {"label": "neutral", "confidence": 0.55, "angleDeg": 48.0, "source": "head_handle"},
+        {"label": "adequate", "score": 0.97, "clubTravelRatio": 0.4, "source": "club_motion"},
+        {"label": "stable", "score": 0.82},
+        {"label": "ready"},
+        {"label": "fair", "score": 0.42, "personFrames": 20, "ballFrames": 4},
+        {"launchDirection": "center"},
+        {"label": "inside-out", "confidence": 0.42, "source": "hybrid"},
+        reference_body_metrics,
+    )
+    assert "head_unstable" not in keys(reference_debug)
+    assert "shoulder_turn_limited" not in keys(reference_debug)
     comments = build_coach_comments(
         {"backswingMs": 430, "downswingMs": 140, "ratio": 3.07},
         {"label": "neutral", "confidence": 0.55, "angleDeg": 48.0, "source": "head_handle"},
@@ -245,7 +264,7 @@ def run_body_pose_case() -> None:
         {"label": "fair", "score": 0.42, "personFrames": 20, "ballFrames": 4},
         {"launchDirection": "center"},
         {"label": "inside-out", "confidence": 0.42, "source": "hybrid"},
-        body_metrics,
+        confirmed_body_metrics,
     )
     debug = build_coach_finding_debug(
         {"backswingMs": 430, "downswingMs": 140, "ratio": 3.07},
@@ -256,7 +275,7 @@ def run_body_pose_case() -> None:
         {"label": "fair", "score": 0.42, "personFrames": 20, "ballFrames": 4},
         {"launchDirection": "center"},
         {"label": "inside-out", "confidence": 0.42, "source": "hybrid"},
-        body_metrics,
+        confirmed_body_metrics,
     )
 
     assert_contains(comments, "머리 기준점 이동이 크게 잡힙니다")

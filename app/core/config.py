@@ -10,6 +10,7 @@ class Settings:
         self.data_dir = Path(os.getenv("DATA_DIR", "/home/ray/data"))
         self.camera_base_url = os.getenv("CAMERA_BASE_URL", "http://127.0.0.1:3001")
         self.hailo_hef_path = os.getenv("HAILO_HEF_PATH", "")
+        self.body_pose_target_fps = max(0.0, float(os.getenv("BODY_POSE_TARGET_FPS", "0")))
 
     @property
     def hailo_available(self) -> bool:

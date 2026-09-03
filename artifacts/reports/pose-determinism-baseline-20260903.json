@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "pose-determinism-report-v1",
+  "caseId": "img-5755-identical-decoded-frames",
+  "fps": 60,
+  "passed": false,
+  "baselineJobId": "f4663ec5-67c6-483b-bb8b-85354175857f",
+  "candidateJobId": "00ea4304-6c83-4603-b44e-8e48d0c65dc9",
+  "passedChecks": [
+    {"name": "event.addressMs", "baseline": 0, "candidate": 0, "difference": 0, "tolerance": 33.333333},
+    {"name": "event.takeawayMs", "baseline": 961, "candidate": 946, "difference": 15, "tolerance": 33.333333}
+  ],
+  "failedChecks": [
+    {"name": "event.topMs", "baseline": 2129, "candidate": 1730, "difference": 399, "tolerance": 33.333333},
+    {"name": "event.impactMs", "baseline": 2528, "candidate": 2262, "difference": 266, "tolerance": 33.333333},
+    {"name": "event.finishMs", "baseline": 2794, "candidate": 2661, "difference": 133, "tolerance": 33.333333},
+    {"name": "coachFindingKeys", "baseline": ["readiness_not_ready"], "candidate": ["readiness_not_ready", "backswing_adequate"]},
+    {"name": "body.shoulderTurnProxy.deltaDeg", "baseline": 7.8, "candidate": 173.6, "difference": 165.8, "tolerance": 3},
+    {"name": "body.hipTurnProxy.deltaDeg", "baseline": 13.4, "candidate": 167.1, "difference": 153.7, "tolerance": 3},
+    {"name": "body.headStability.movementRatio", "baseline": 1.67, "candidate": 1.01, "relativeDifference": 0.39521, "tolerance": 0.05},
+    {"name": "tempo.ratio", "baseline": 2.93, "candidate": 1.47, "difference": 1.46, "tolerance": 0.05},
+    {"name": "shaftPlane.angleDeg", "baseline": 42.5, "candidate": 63.3, "difference": 20.8, "tolerance": 3}
+  ]
+}

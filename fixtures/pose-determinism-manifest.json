@@ -1,0 +1,17 @@
+{
+  "schemaVersion": "pose-determinism-manifest-v1",
+  "privateFixture": true,
+  "cases": [
+    {
+      "caseId": "img-5755-identical-decoded-frames",
+      "fps": 60,
+      "frameCount": 197,
+      "decodedFrameMd5StreamSha256": "752c874b0e13f1ce60496180ce68e0c30c806fb1a9f05d3dd08b4a0b690a1aae",
+      "jobs": [
+        "f4663ec5-67c6-483b-bb8b-85354175857f",
+        "00ea4304-6c83-4603-b44e-8e48d0c65dc9"
+      ],
+      "expected": "fail-until-event-and-pose-determinism-is-fixed"
+    }
+  ]
+}

@@ -36,6 +36,12 @@ uvicorn app.main:app --host 0.0.0.0 --port 3002
 - `DATA_DIR=/home/ray/data`
 - `CAMERA_BASE_URL=http://127.0.0.1:3001`
 - 선택: `HAILO_HEF_PATH=/usr/share/hailo-models/yolov8s_h8.hef`
+- 선택: `BODY_POSE_TARGET_FPS=30` — body pose를 원본 FPS 기준 약 30fps로 분석합니다. 기본값 `0`은 기존 frame-count sampling입니다.
+- 선택: `VISIBLE_GRIP_TRACK_ENABLED=1` — dominant visible wrist identity를 고정하고 가까운 club handle을 corroboration으로 사용합니다. 기본값 `0`은 기존 wrist track입니다.
+
+두 pose refresh 옵션은 서로 독립적으로 되돌릴 수 있습니다. 운영 문제 발생 시 두 값을 각각 `0`으로
+설정하고 서비스를 재시작하면 코드 rollback 없이 기존 동작으로 복귀합니다. 가려진 손목의 장기
+구간은 생성하거나 보간하지 않으며, 양손 관측이 필요한 지표만 별도로 보류합니다.
 
 ## API
 

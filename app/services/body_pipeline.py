@@ -88,12 +88,68 @@ def _normalize_box(box: Tuple[int, int, int, int], width: int, height: int) -> D
     }
 
 
-def _sample_stride(frame_count: int) -> int:
+def _sample_stride(frame_count: int, fps: float = 0.0, target_fps: float = 0.0) -> int:
+    if target_fps > 0 and fps > 0:
+        return max(1, int(round(fps / min(target_fps, fps))))
     if frame_count <= 0:
         return 1
     if frame_count <= BODY_FULL_SAMPLE_MAX_FRAMES:
         return 1
     return max(1, frame_count // BODY_SAMPLE_TARGET)
+
+
+def _effective_sample_fps(fps: float, stride: int) -> float:
+    if fps <= 0:
+        return 0.0
+    return fps / max(1, stride)
+
+
+def _pose_track_quality(
+    frames: List[Dict[str, Any]], effective_fps: float, visibility_threshold: float = 0.25
+) -> Dict[str, Any]:
+    frame_count = len(frames)
+    frame_ms = 1000.0 / effective_fps if effective_fps > 0 else 0.0
+    joints: Dict[str, Dict[str, Any]] = {}
+    for name in POSE_KEYPOINTS:
+        usable = []
+        for frame in frames:
+            keypoints = frame.get("keypoints") if isinstance(frame, dict) else None
+            point = keypoints.get(name) if isinstance(keypoints, dict) else None
+            usable.append(
+                isinstance(point, list)
+                and len(point) >= 3
+                and float(point[2]) >= visibility_threshold
+            )
+
+        longest_gap = 0
+        current_gap = 0
+        for is_usable in usable:
+            if is_usable:
+                longest_gap = max(longest_gap, current_gap)
+                current_gap = 0
+            else:
+                current_gap += 1
+        longest_gap = max(longest_gap, current_gap)
+        usable_count = sum(usable)
+        joints[name] = {
+            "usableFrames": usable_count,
+            "sampledFrames": frame_count,
+            "usableCoverage": round(usable_count / frame_count, 6) if frame_count else 0.0,
+            "maxGapFrames": longest_gap,
+            "maxGapMs": int(round(longest_gap * frame_ms)) if frame_ms > 0 else None,
+        }
+
+    core_names = ("left_shoulder", "right_shoulder", "left_hip", "right_hip", "left_wrist", "right_wrist")
+    core_coverage = min((joints[name]["usableCoverage"] for name in core_names), default=0.0)
+    return {
+        "label": "usable" if frame_count >= 90 and core_coverage >= 0.8 else "limited",
+        "score": round(core_coverage, 6),
+        "confidence": round(core_coverage, 6),
+        "visibilityThreshold": visibility_threshold,
+        "sampledFrames": frame_count,
+        "source": "mediapipe_pose_legacy",
+        "joints": joints,
+    }
 
 
 def _resize_for_detection(frame) -> Tuple[Any, float]:
@@ -249,7 +305,8 @@ def analyze_body_video(
     width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
     height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     duration_ms = int(round(frame_count * 1000 / fps)) if fps > 0 and frame_count > 0 else 0
-    stride = _sample_stride(frame_count)
+    target_fps = settings.body_pose_target_fps
+    stride = _sample_stride(frame_count, fps, target_fps)
     detector = _create_detector()
     pose_detector = _create_pose_detector()
 
@@ -305,6 +362,7 @@ def analyze_body_video(
                             "confidence": round(float(confidence), 6),
                         },
                         "keypoints": keypoints,
+                        "keypointSource": "observed" if keypoints else "missing",
                         "roiMotion": roi_motion,
                     }
                 )
@@ -315,6 +373,7 @@ def analyze_body_video(
                         "timeMs": time_ms,
                         "personBox": None,
                         "keypoints": keypoints,
+                        "keypointSource": "observed" if keypoints else "missing",
                         "roiMotion": roi_motion,
                     }
                 )
@@ -327,6 +386,8 @@ def analyze_body_video(
     coverage = float(detected_frames / processed) if processed > 0 else 0.0
     pose_coverage = float(pose_frames / processed) if processed > 0 else 0.0
     wrist_coverage = float(wrist_frames / processed) if processed > 0 else 0.0
+    effective_sample_fps = _effective_sample_fps(fps, stride)
+    pose_track_quality = _pose_track_quality(sampled_frames, effective_sample_fps)
     label = "available" if detected_frames > 0 else "missing"
     summary = (
         f"body bootstrap complete: sampled {processed} frames, "
@@ -349,6 +410,9 @@ def analyze_body_video(
             "durationMs": duration_ms or (int(video_meta.get("durationMs")) if video_meta and video_meta.get("durationMs") is not None else 0),
             "sampleStride": stride,
             "sampleTargetFrames": BODY_SAMPLE_TARGET,
+            "sampleMode": "target_fps" if target_fps > 0 else "legacy_target_count",
+            "sampleTargetFps": round(target_fps, 3) if target_fps > 0 else None,
+            "effectiveSampleFps": round(effective_sample_fps, 3),
             "sampledFrames": processed,
             "detectMaxSide": BODY_DETECT_MAX_SIDE,
             "poseMaxSide": POSE_DETECT_MAX_SIDE,
@@ -389,6 +453,7 @@ def analyze_body_video(
                 "detectedFrames": wrist_frames,
                 "sampledFrames": processed,
             },
+            "poseTrackQuality": pose_track_quality,
         },
         "summary": summary,
         "debug": {

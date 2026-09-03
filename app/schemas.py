@@ -56,9 +56,9 @@ class SwingPlane(BaseModel):
 
 
 class Tempo(BaseModel):
-    backswingMs: int
-    downswingMs: int
-    ratio: float
+    backswingMs: Optional[int] = None
+    downswingMs: Optional[int] = None
+    ratio: Optional[float] = None
 
 
 class ImpactStability(BaseModel):
@@ -179,6 +179,7 @@ class JobResult(BaseModel):
     confidence: Optional[float] = None
     analysisQuality: Optional[Dict[str, Any]] = None
     eventValidation: Optional[Dict[str, Any]] = None
+    metricQuality: Optional[Dict[str, Dict[str, Any]]] = None
     meta: ResultMeta
     debug: Optional[Dict[str, Any]] = None
     progress: Optional[ProgressPayload] = None

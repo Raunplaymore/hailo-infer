@@ -654,6 +654,35 @@ def _angle_deg(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> 
     return math.degrees(math.atan2(a[1] - b[1], a[0] - b[0]))
 
 
+def _axial_angle_delta(a_deg: float, b_deg: float) -> float:
+    """Return the smallest difference between two unoriented 2D axes.
+
+    A shoulder or hip line has 180-degree symmetry: reversing its endpoints
+    must not turn a small pose change into an apparent near-180-degree turn.
+    """
+    delta = abs((float(a_deg) - float(b_deg)) % 180.0)
+    return min(delta, 180.0 - delta)
+
+
+def _unwrap_axial_samples(samples: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    """Unwrap a time-ordered 180-degree-periodic angle sequence."""
+    if not samples:
+        return []
+    result: List[Tuple[float, float]] = []
+    previous: Optional[float] = None
+    for timestamp, angle in sorted(samples, key=lambda item: item[0]):
+        base = float(angle) % 180.0
+        if previous is None:
+            current = base
+        else:
+            center = round((previous - base) / 180.0)
+            candidates = [base + (center + offset) * 180.0 for offset in (-1, 0, 1)]
+            current = min(candidates, key=lambda candidate: abs(candidate - previous))
+        result.append((timestamp, current))
+        previous = current
+    return result
+
+
 def _median_point_distance(points: List[Tuple[float, float, float]]) -> float:
     if len(points) < 2:
         return 0.0
@@ -662,6 +691,49 @@ def _median_point_distance(points: List[Tuple[float, float, float]]) -> float:
     center_x = _median(xs)
     center_y = _median(ys)
     return max(math.hypot(point[0] - center_x, point[1] - center_y) for point in points)
+
+
+def _torso_normalized_head_point(frame: dict, min_visibility: float = 0.35) -> Optional[Tuple[float, float, float]]:
+    names = ("nose", "left_shoulder", "right_shoulder", "left_hip", "right_hip")
+    points = {name: _keypoint_xyc(frame, name) for name in names}
+    if any(point is None or point[2] < min_visibility for point in points.values()):
+        return None
+    nose = points["nose"]
+    left_shoulder = points["left_shoulder"]
+    right_shoulder = points["right_shoulder"]
+    left_hip = points["left_hip"]
+    right_hip = points["right_hip"]
+    assert nose and left_shoulder and right_shoulder and left_hip and right_hip
+
+    shoulder_dx = right_shoulder[0] - left_shoulder[0]
+    shoulder_dy = right_shoulder[1] - left_shoulder[1]
+    shoulder_width = math.hypot(shoulder_dx, shoulder_dy)
+    if shoulder_width < 1e-6:
+        return None
+    axis_x = shoulder_dx / shoulder_width
+    axis_y = shoulder_dy / shoulder_width
+    torso_x = (left_shoulder[0] + right_shoulder[0] + left_hip[0] + right_hip[0]) / 4.0
+    torso_y = (left_shoulder[1] + right_shoulder[1] + left_hip[1] + right_hip[1]) / 4.0
+    shoulder_center_x = (left_shoulder[0] + right_shoulder[0]) / 2.0
+    shoulder_center_y = (left_shoulder[1] + right_shoulder[1]) / 2.0
+    hip_center_x = (left_hip[0] + right_hip[0]) / 2.0
+    hip_center_y = (left_hip[1] + right_hip[1]) / 2.0
+    torso_length = math.hypot(shoulder_center_x - hip_center_x, shoulder_center_y - hip_center_y)
+    body_scale = max(shoulder_width, torso_length, 1e-6)
+    relative_x = nose[0] - torso_x
+    relative_y = nose[1] - torso_y
+    horizontal = (relative_x * axis_x + relative_y * axis_y) / body_scale
+    vertical = (-relative_x * axis_y + relative_y * axis_x) / body_scale
+    confidence = min(point[2] for point in points.values() if point is not None)
+    return horizontal, vertical, confidence
+
+
+def _axis_movement(points: List[Tuple[float, float, float]], axis: int) -> float:
+    if not points:
+        return 0.0
+    values = [point[axis] for point in points]
+    center = _median(values)
+    return max(abs(value - center) for value in values)
 
 
 def _body_pose_metrics(
@@ -674,9 +746,9 @@ def _body_pose_metrics(
     if not isinstance(frames, list) or not frames:
         return {
             "poseCoverage": {"label": "missing", "score": 0.0, "sampleCount": 0},
-            "headStability": {"label": "unknown", "score": 0.0, "movementRatio": None, "sampleCount": 0, "confidence": 0.0},
-            "shoulderTurnProxy": {"label": "unknown", "deltaDeg": None, "sampleCount": 0, "confidence": 0.0},
-            "hipTurnProxy": {"label": "unknown", "deltaDeg": None, "sampleCount": 0, "confidence": 0.0},
+            "headStability": {"label": "unknown", "status": "withheld", "score": 0.0, "movementRatio": None, "sampleCount": 0, "confidence": 0.0, "reasons": ["POSE_MISSING"]},
+            "shoulderTurnProxy": {"label": "unknown", "status": "withheld", "deltaDeg": None, "sampleCount": 0, "confidence": 0.0, "reasons": ["POSE_MISSING"]},
+            "hipTurnProxy": {"label": "unknown", "status": "withheld", "deltaDeg": None, "sampleCount": 0, "confidence": 0.0, "reasons": ["POSE_MISSING"]},
         }
 
     pose_frames = [frame for frame in frames if isinstance(frame, dict) and isinstance(frame.get("keypoints"), dict)]
@@ -689,52 +761,42 @@ def _body_pose_metrics(
         if window_start <= _safe_float(frame.get("timeMs"), 0.0) <= window_end
     ] or pose_frames
 
-    shoulder_widths: List[float] = []
-    nose_points: List[Tuple[float, float, float]] = []
+    head_points: List[Tuple[float, float, float]] = []
     shoulder_angles: List[Tuple[float, float]] = []
     hip_angles: List[Tuple[float, float]] = []
 
     for frame in window_frames:
         t = _safe_float(frame.get("timeMs"), 0.0)
-        nose = _keypoint_xyc(frame, "nose")
         left_shoulder = _keypoint_xyc(frame, "left_shoulder")
         right_shoulder = _keypoint_xyc(frame, "right_shoulder")
         left_hip = _keypoint_xyc(frame, "left_hip")
         right_hip = _keypoint_xyc(frame, "right_hip")
-        if nose and nose[2] >= 0.35:
-            nose_points.append(nose)
+        normalized_head = _torso_normalized_head_point(frame)
+        if normalized_head:
+            head_points.append(normalized_head)
         if left_shoulder and right_shoulder and left_shoulder[2] >= 0.35 and right_shoulder[2] >= 0.35:
-            shoulder_widths.append(math.hypot(left_shoulder[0] - right_shoulder[0], left_shoulder[1] - right_shoulder[1]))
             shoulder_angles.append((t, _angle_deg(left_shoulder, right_shoulder)))
         if left_hip and right_hip and left_hip[2] >= 0.35 and right_hip[2] >= 0.35:
             hip_angles.append((t, _angle_deg(left_hip, right_hip)))
 
-    scale = max(0.03, _median(shoulder_widths) if shoulder_widths else 0.0)
-    head_move = _median_point_distance(nose_points)
-    head_ratio = head_move / scale if scale > 0 else 0.0
-    if len(nose_points) < 5:
-        head_label = "unknown"
-        head_score = 0.0
-    elif head_ratio <= 0.22:
-        head_label = "stable"
-        head_score = 1.0 - _clamp(head_ratio / 0.35)
-    elif head_ratio <= 0.42:
-        head_label = "moderate"
-        head_score = 1.0 - _clamp(head_ratio / 0.55)
-    else:
-        head_label = "unstable"
-        head_score = _clamp(head_ratio / 0.75)
+    head_ratio = _median_point_distance(head_points)
+    horizontal_head_ratio = _axis_movement(head_points, 0)
+    vertical_head_ratio = _axis_movement(head_points, 1)
+    # The torso-normalized coordinate has a different distribution from the
+    # retired nose/shoulder-width proxy. Keep the measurements for research,
+    # but do not reuse the old thresholds or emit a stability diagnosis.
+    head_label = "unknown"
+    head_score = 0.0
 
     def turn_proxy(angle_samples: List[Tuple[float, float]], name: str) -> Dict[str, object]:
         if len(angle_samples) < 5:
-            return {"label": "unknown", "deltaDeg": None, "sampleCount": len(angle_samples), "confidence": 0.0, "source": "pose_2d_proxy"}
-        address_samples = [angle for t, angle in angle_samples if t <= address_ms + 120]
-        top_samples = [angle for t, angle in angle_samples if max(address_ms, top_ms - 140) <= t <= top_ms + 140]
+            return {"label": "unknown", "status": "withheld", "deltaDeg": None, "sampleCount": len(angle_samples), "confidence": 0.0, "source": "pose_2d_proxy", "reasons": ["POSE_SAMPLES_INSUFFICIENT"]}
+        unwrapped = _unwrap_axial_samples(angle_samples)
+        address_samples = [angle for t, angle in unwrapped if t <= address_ms + 120]
+        top_samples = [angle for t, angle in unwrapped if max(address_ms, top_ms - 140) <= t <= top_ms + 140]
         if not address_samples or not top_samples:
-            return {"label": "unknown", "deltaDeg": None, "sampleCount": len(angle_samples), "confidence": 0.0, "source": "pose_2d_proxy"}
-        delta = abs(_median(top_samples) - _median(address_samples))
-        # Normalize wrap-around artifacts from atan2.
-        delta = min(delta, abs(360.0 - delta))
+            return {"label": "unknown", "status": "withheld", "deltaDeg": None, "sampleCount": len(angle_samples), "confidence": 0.0, "source": "pose_2d_proxy", "reasons": ["EVENT_WINDOW_SAMPLES_MISSING"]}
+        delta = _axial_angle_delta(_median(top_samples), _median(address_samples))
         limited_cutoff = 6.0 if name == "hip" else 8.0
         high_cutoff = 28.0 if name == "hip" else 36.0
         if delta < limited_cutoff:
@@ -746,11 +808,13 @@ def _body_pose_metrics(
         confidence = _clamp(len(angle_samples) / float(max(8, len(window_frames)))) * 0.55
         return {
             "label": label,
+            "status": "reference",
             "deltaDeg": round(delta, 1),
             "sampleCount": len(angle_samples),
             "confidence": round(confidence, 2),
             "source": "pose_2d_proxy",
             "comment": "2D keypoint 각도 변화라 실제 회전량 확정값은 아닙니다.",
+            "reasons": ["SINGLE_CAMERA_2D_REFERENCE", "REPEATABILITY_NOT_VALIDATED"],
         }
 
     return {
@@ -762,21 +826,47 @@ def _body_pose_metrics(
         },
         "headStability": {
             "label": head_label,
+            "status": "withheld",
             "score": round(_clamp(head_score), 2),
-            "movementRatio": round(head_ratio, 2) if nose_points else None,
-            "sampleCount": len(nose_points),
-            "confidence": round(_clamp(len(nose_points) / float(max(8, len(window_frames)))), 2),
-            "source": "nose_vs_shoulder_width",
+            "movementRatio": round(head_ratio, 2) if head_points else None,
+            "horizontalMovementRatio": round(horizontal_head_ratio, 2) if head_points else None,
+            "verticalMovementRatio": round(vertical_head_ratio, 2) if head_points else None,
+            "sampleCount": len(head_points),
+            "confidence": round(_clamp(len(head_points) / float(max(8, len(window_frames)))), 2),
+            "source": "nose_vs_torso_axis_body_scale_normalized",
+            "reasons": [
+                "SINGLE_CAMERA_2D_REFERENCE",
+                "HEAD_THRESHOLDS_NOT_CALIBRATED",
+                "REPEATABILITY_NOT_VALIDATED",
+            ],
         },
         "shoulderTurnProxy": turn_proxy(shoulder_angles, "shoulder"),
         "hipTurnProxy": turn_proxy(hip_angles, "hip"),
     }
 
 
-def _wrist_track_from_body(body: Optional[Dict[str, Any]]) -> List[dict]:
+def _wrist_track_from_body(
+    body: Optional[Dict[str, Any]], lock_visible_side: bool = False
+) -> List[dict]:
     frames = body.get("frames") if isinstance(body, dict) else None
     if not isinstance(frames, list):
         return []
+    dominant_wrist: Optional[str] = None
+    if lock_visible_side:
+        visibility = {"left_wrist": 0.0, "right_wrist": 0.0}
+        usable = {"left_wrist": 0, "right_wrist": 0}
+        for frame in frames:
+            if not isinstance(frame, dict):
+                continue
+            for name in visibility:
+                point = _keypoint_xyc(frame, name)
+                if point and point[2] >= 0.25:
+                    usable[name] += 1
+                    visibility[name] += point[2]
+        dominant_wrist = max(
+            visibility,
+            key=lambda name: (usable[name], visibility[name]),
+        )
     track: List[dict] = []
     previous: Optional[dict] = None
     for idx, frame in enumerate(frames):
@@ -791,9 +881,11 @@ def _wrist_track_from_body(body: Optional[Dict[str, Any]]) -> List[dict]:
             x, y, conf = point
             if conf < 0.02:
                 continue
+            if dominant_wrist and name != dominant_wrist:
+                continue
             candidates.append({"x": x, "y": y, "conf": conf, "wristSource": name})
         wrist_gap = math.hypot(left[0] - right[0], left[1] - right[1]) if left and right else float("inf")
-        if left and right and left[2] >= 0.02 and right[2] >= 0.02 and wrist_gap <= 0.16:
+        if not lock_visible_side and left and right and left[2] >= 0.02 and right[2] >= 0.02 and wrist_gap <= 0.16:
             total_conf = max(1e-6, left[2] + right[2])
             candidates.append(
                 {
@@ -831,6 +923,40 @@ def _wrist_track_from_body(body: Optional[Dict[str, Any]]) -> List[dict]:
         previous = point
     track.sort(key=lambda point: (_safe_int(point.get("frame"), 0), _safe_float(point.get("t"), 0.0)))
     return track
+
+
+def _visible_grip_track(wrist_track: List[dict], handle_track: List[dict]) -> List[dict]:
+    """Build an observable grip track without inventing an occluded wrist.
+
+    A confident visible wrist remains the primary observation. A nearby club
+    handle corroborates its location, and may bridge only short pose gaps.
+    """
+    if not wrist_track:
+        return []
+    result: List[dict] = []
+    sorted_handles = sorted(handle_track, key=lambda point: _safe_float(point.get("t"), 0.0))
+    for wrist in wrist_track:
+        point = dict(wrist)
+        point["source"] = "visible_wrist"
+        point["gripSource"] = str(wrist.get("wristSource") or "visible_wrist")
+        if sorted_handles:
+            handle = min(
+                sorted_handles,
+                key=lambda candidate: abs(
+                    _safe_float(candidate.get("t"), 0.0) - _safe_float(wrist.get("t"), 0.0)
+                ),
+            )
+            time_gap = abs(_safe_float(handle.get("t"), 0.0) - _safe_float(wrist.get("t"), 0.0))
+            distance = math.hypot(
+                _safe_float(handle.get("x"), 0.0) - _safe_float(wrist.get("x"), 0.0),
+                _safe_float(handle.get("y"), 0.0) - _safe_float(wrist.get("y"), 0.0),
+            )
+            if time_gap <= 50.0 and distance <= 0.18:
+                point["conf"] = min(1.0, _safe_float(wrist.get("conf"), 0.0) + 0.05)
+                point["source"] = "visible_wrist_club_handle"
+                point["handleDistance"] = round(distance, 6)
+        result.append(point)
+    return result
 
 
 def _nearest_track_index_by_time(track: List[dict], time_ms: float) -> Optional[int]:
@@ -1376,6 +1502,37 @@ def _tempo(takeaway_ms: int, top_ms: int, impact_ms: int) -> Tuple[int, int, flo
     return backswing, downswing, ratio
 
 
+def _pose_track_capabilities(pose_track_quality: Optional[Dict[str, Any]]) -> Dict[str, bool]:
+    if not isinstance(pose_track_quality, dict):
+        return {"eventPose": True, "bodyTurn": True, "twoHand": True, "legacyUnknown": True}
+    joints = pose_track_quality.get("joints")
+    if not isinstance(joints, dict):
+        usable = str(pose_track_quality.get("label") or "").lower() == "usable"
+        return {"eventPose": usable, "bodyTurn": usable, "twoHand": usable, "legacyUnknown": False}
+
+    def usable(name: str) -> bool:
+        quality = joints.get(name)
+        if not isinstance(quality, dict):
+            return False
+        return (
+            _safe_float(quality.get("usableCoverage"), 0.0) >= 0.8
+            and _safe_int(quality.get("maxGapFrames"), 9999) <= 12
+        )
+
+    shoulders_hips = all(
+        usable(name)
+        for name in ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
+    )
+    left_wrist = usable("left_wrist")
+    right_wrist = usable("right_wrist")
+    return {
+        "eventPose": shoulders_hips and (left_wrist or right_wrist),
+        "bodyTurn": shoulders_hips,
+        "twoHand": left_wrist and right_wrist,
+        "legacyUnknown": False,
+    }
+
+
 def _validate_event_evidence(
     *,
     body_events: Dict[str, Any],
@@ -1385,6 +1542,7 @@ def _validate_event_evidence(
     club_handle_track: Optional[List[dict]] = None,
     club_track: Optional[List[dict]] = None,
     body_selector_confidence: float = 0.0,
+    pose_track_quality: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Grade event evidence without treating every weak club signal as total failure.
 
@@ -1405,7 +1563,21 @@ def _validate_event_evidence(
             "codes": reasons,
             "message": "클럽 추적이 부족해 템포·임팩트·경로 코칭을 보류합니다. 클럽 head와 handle이 임팩트 전후에 연속 검출되도록 다시 촬영하세요." if reasons else None,
         }
-    body_events_usable = top_ms >= 0 and impact_ms >= 0 and body_selector_confidence >= 0.3
+    pose_track_limited = (
+        isinstance(pose_track_quality, dict)
+        and str(pose_track_quality.get("label") or "").lower() == "limited"
+    )
+    pose_capabilities = _pose_track_capabilities(pose_track_quality)
+    if pose_track_limited and not pose_capabilities["eventPose"]:
+        reasons.append("POSE_TRACK_QUALITY_LIMITED")
+    elif pose_track_limited:
+        warnings.append("POSE_TRACK_PARTIAL")
+    body_events_usable = (
+        top_ms >= 0
+        and impact_ms >= 0
+        and body_selector_confidence >= 0.3
+        and pose_capabilities["eventPose"]
+    )
     if wrist_top and abs(top_ms - _safe_float(wrist_top.get("t"), top_ms)) > 350.0:
         warnings.append("POSE_EVENT_SOURCE_DIVERGENCE")
     if wrist_impact and abs(impact_ms - _safe_float(wrist_impact.get("t"), impact_ms)) > 250.0:
@@ -1499,7 +1671,11 @@ def _validate_event_evidence(
             else "포즈 기반 address·top·finish는 참고값으로 제공하지만, 임팩트 클럽 근거가 없어 템포·임팩트·경로 코칭은 보류합니다."
         )
     elif status == "withheld":
-        message = "클럽 추적 또는 이벤트 근거가 부족해 템포·임팩트·경로 코칭을 보류합니다. 촬영 구도와 클럽이 화면에 유지되는지 확인하세요."
+        message = (
+            "관절 추적의 연속성이 부족해 스윙 이벤트와 파생 코칭을 보류합니다. 양팔과 손목이 스윙 내내 화면에 보이도록 촬영 구도를 확인하세요."
+            if pose_track_limited
+            else "클럽 추적 또는 이벤트 근거가 부족해 템포·임팩트·경로 코칭을 보류합니다. 촬영 구도와 클럽이 화면에 유지되는지 확인하세요."
+        )
     else:
         message = None
     return {
@@ -1519,6 +1695,15 @@ def _validate_event_evidence(
             "confirmedHeadFrames": len({_safe_int(point.get("frame"), -1) for point in near_impact} - {-1}),
             "referenceFrames": len(reference_frames - {-1}),
             "windowMs": 200,
+        },
+        "poseCapabilities": pose_capabilities,
+        "metricDependencies": {
+            "tempo": ["eventPose", "impactEvidence"],
+            "shaft": ["eventPose", "clubHeadHandle"],
+            "backswing": ["eventPose", "visibleWrist"],
+            "bodyTurn": ["bodyTurn"],
+            "twoHandRelation": ["twoHand"],
+            "ballFlight": ["validatedBallTrack", "cameraCalibration"],
         },
     }
 
@@ -1898,6 +2083,24 @@ def _metric_evidence(
     return evidence
 
 
+def _metric_quality_item(
+    evidence: Dict[str, object], value: object, confidence: float = 0.0
+) -> Dict[str, object]:
+    status = str(evidence.get("status") or "withheld")
+    return {
+        "status": status,
+        "value": value if status in {"confirmed", "reference"} else None,
+        "confidence": round(_clamp(confidence), 2),
+        "source": str(evidence.get("source") or "unknown"),
+        "reasons": list(evidence.get("reasons") or []),
+        **(
+            {"observedFrames": evidence["observedFrames"]}
+            if evidence.get("observedFrames") is not None
+            else {}
+        ),
+    }
+
+
 def _finalize_metric_evidence(
     event_validation: Dict[str, object],
     *,
@@ -2013,6 +2216,10 @@ def _fusion_metrics(
     shoulder = body_metrics.get("shoulderTurnProxy")
     shoulder_label = str(shoulder.get("label") or "") if isinstance(shoulder, dict) else ""
     shoulder_conf = _safe_float(shoulder.get("confidence"), 0.0) if isinstance(shoulder, dict) else 0.0
+    shoulder_status = str(shoulder.get("status") or "reference") if isinstance(shoulder, dict) else "withheld"
+    if shoulder_status != "confirmed":
+        shoulder_label = ""
+        shoulder_conf = 0.0
 
     release_label = "unknown"
     release_comment = "공/페이스 데이터 없이 릴리스 타이밍을 확정하지 않습니다."
@@ -2158,7 +2365,8 @@ def analyze_meta(
     )
     person_track = _select_best_track(frames, PERSON_LABELS)
     body_artifact = _load_body_artifact(job_id, body_path)
-    wrist_track = _wrist_track_from_body(body_artifact)
+    visible_grip_enabled = os.getenv("VISIBLE_GRIP_TRACK_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+    wrist_track = _wrist_track_from_body(body_artifact, lock_visible_side=visible_grip_enabled)
     club_head_track = _filter_track_by_wrist(
         raw_club_head_track, wrist_track,
         max_distance=CLUB_HEAD_MAX_WRIST_DISTANCE, max_area=CLUB_HEAD_MAX_AREA,
@@ -2173,6 +2381,7 @@ def analyze_meta(
         coordinate_x_scale=coordinate_x_scale,
         coordinate_y_scale=coordinate_y_scale,
     )
+    grip_track = _visible_grip_track(wrist_track, handle_track) if visible_grip_enabled else wrist_track
     club_track = _filter_track_by_wrist(
         raw_club_track, wrist_track,
         max_distance=CLUB_BOX_MAX_WRIST_DISTANCE, max_area=CLUB_BOX_MAX_AREA,
@@ -2199,9 +2408,9 @@ def analyze_meta(
     use_body_selector = _body_selector_is_operational(viewpoint, body_selector)
 
     if len(motion_track) < min_points:
-        if use_body_selector and len(wrist_track) >= min_points:
-            motion_track = wrist_track
-            motion_source = "pose_wrist"
+        if use_body_selector and len(grip_track) >= min_points:
+            motion_track = grip_track
+            motion_source = "visible_grip" if visible_grip_enabled else "pose_wrist"
         elif not force:
             raise CoachError("NOT_SWING", f"insufficient service7 club detections (source={motion_source}, motionFrames={len(motion_track)}, clubHeadFrames={len(club_head_track)}, clubHandleFrames={len(handle_track)}, clubFrames={len(club_track)}, personFrames={len(person_track)})")
     confs = [p["conf"] for p in motion_track]
@@ -2216,7 +2425,7 @@ def analyze_meta(
     address_idx, top_idx, impact_idx, finish_idx, event_source, wrist_top = _segment_events(
         motion_track,
         speeds,
-        wrist_track,
+        grip_track,
         metric_club_head_track,
     )
     body_selector_events = body_selector.get("events") if isinstance(body_selector.get("events"), dict) else {}
@@ -2226,8 +2435,8 @@ def analyze_meta(
         impact_idx = _nearest_track_index_by_time(motion_track, _safe_float(body_selector_events.get("impactMs"), 0.0))
         finish_idx = _nearest_track_index_by_time(motion_track, _safe_float(body_selector_events.get("finishMs"), 0.0))
         event_source = f"body_selector_down_the_line:{body_selector.get('method')}"
-    wrist_impact = _find_impact_from_wrist_track(wrist_track, wrist_top, club_head_track) if wrist_top else None
-    wrist_finish = _find_finish_from_wrist_track(wrist_track, wrist_impact) if wrist_impact else None
+    wrist_impact = _find_impact_from_wrist_track(grip_track, wrist_top, club_head_track) if wrist_top else None
+    wrist_finish = _find_finish_from_wrist_track(grip_track, wrist_impact) if wrist_impact else None
     body_selector_events, impact_refined = _refine_late_body_impact(
         body_selector_events,
         wrist_impact,
@@ -2247,6 +2456,9 @@ def analyze_meta(
         club_handle_track=metric_handle_track,
         club_track=metric_club_track,
         body_selector_confidence=_safe_float(body_selector.get("confidence"), 0.0) if use_body_selector else 0.0,
+        pose_track_quality=(body_artifact.get("metrics") or {}).get("poseTrackQuality")
+        if isinstance(body_artifact, dict) and isinstance(body_artifact.get("metrics"), dict)
+        else None,
     )
     if impact_idx is None and EVENT_FALLBACK_ENABLED:
         impact_idx = _argmax(speeds) if speeds else None
@@ -2330,8 +2542,8 @@ def analyze_meta(
         address_idx,
         top_idx,
         height,
-        wrist_track,
-        str(event_source).startswith("pose_wrist"),
+        grip_track,
+        str(event_source).startswith(("pose_wrist", "visible_grip")),
     )
     readiness = _readiness_metric(frames)
     tracking = _tracking_quality(frames, club_head_track, handle_track, club_track, ball_track, person_track)
@@ -2388,10 +2600,50 @@ def analyze_meta(
         backswing=backswing,
         body_metrics=body_metrics,
     )
+    event_quality_for_contract = event_validation.get("eventQuality")
+    top_quality = (
+        event_quality_for_contract.get("top")
+        if isinstance(event_quality_for_contract, dict)
+        and isinstance(event_quality_for_contract.get("top"), dict)
+        else {}
+    )
+    pose_coverage_for_contract = body_metrics.get("poseCoverage") if isinstance(body_metrics, dict) else {}
+    metric_quality = {
+        "tempo": _metric_quality_item(
+            metric_evidence["tempo"],
+            ratio,
+            _safe_float(top_quality.get("confidence"), 0.0),
+        ),
+        "impact": _metric_quality_item(metric_evidence["impact"], impact_score, 0.0),
+        "impactStability": _metric_quality_item(metric_evidence["impactStability"], impact_label, 0.0),
+        "path": _metric_quality_item(metric_evidence["path"], swing_label, swing_conf),
+        "shaft": _metric_quality_item(
+            metric_evidence["shaft"],
+            shaft.get("angleDeg"),
+            _safe_float(shaft.get("confidence"), 0.0),
+        ),
+        "backswing": _metric_quality_item(
+            metric_evidence["backswing"],
+            backswing.get("label"),
+            _safe_float(backswing.get("confidence"), 0.0),
+        ),
+        "ball": _metric_quality_item(metric_evidence["ball"], None, 0.0),
+        "body": _metric_quality_item(
+            metric_evidence["body"],
+            pose_coverage_for_contract.get("score") if isinstance(pose_coverage_for_contract, dict) else None,
+            _safe_float(
+                pose_coverage_for_contract.get("score"), 0.0
+            ) if isinstance(pose_coverage_for_contract, dict) else 0.0,
+        ),
+    }
     wrist_sources: Dict[str, int] = {}
     for point in wrist_track:
         source_name = str(point.get("wristSource") or "unknown")
         wrist_sources[source_name] = wrist_sources.get(source_name, 0) + 1
+    grip_sources: Dict[str, int] = {}
+    for point in grip_track:
+        source_name = str(point.get("source") or "unknown")
+        grip_sources[source_name] = grip_sources.get(source_name, 0) + 1
     overlay = _build_overlay_payload(body_artifact, club_head_track, handle_track)
 
     decoder_confidence = _safe_float(body_selector.get("confidence"), 0.0) if use_body_selector else None
@@ -2513,12 +2765,27 @@ def analyze_meta(
         backswing = {"label": "withheld", "score": 0.0, "source": "event_validation"}
         ball = {"launchDirection": "unknown", "launchAngle": None, "speedRelative": "unknown", "confidence": 0.0}
         fusion_metrics = {"eventSegmentation": event_validation}
+        pose_quality_limited = "POSE_TRACK_QUALITY_LIMITED" in event_validation.get("codes", [])
         quality_finding = {
             "key": "event_segmentation_unreliable", "category": "quality", "severity": "high", "confidence": 1.0,
             "priority": "이벤트 참고" if event_validation["status"] == "partial" else "분석 보류",
-            "evidence": "스윙 이벤트는 포즈 참고값으로만 확보됐고 클럽 기반 확정 근거가 부족합니다.",
-            "interpretation": event_validation["message"], "action": "클럽이 화면에 보여도 club head·handle 점이 동시에 안정적으로 분리되지 않았습니다. 이 구간은 보정·학습 후보로 보관하세요.",
-            "drill": None, "checkpoint": "임팩트 전후에 club head와 handle 점이 동시에 연속 검출되는지 확인합니다.",
+            "evidence": (
+                "관절 추적에 긴 공백이 있어 포즈 기반 이벤트를 확정할 수 없습니다."
+                if pose_quality_limited
+                else "스윙 이벤트는 포즈 참고값으로만 확보됐고 클럽 기반 확정 근거가 부족합니다."
+            ),
+            "interpretation": event_validation["message"],
+            "action": (
+                "양팔과 손목이 address부터 finish까지 가려지지 않는 촬영 구도를 확보하세요."
+                if pose_quality_limited
+                else "클럽이 화면에 보여도 club head·handle 점이 동시에 안정적으로 분리되지 않았습니다. 이 구간은 보정·학습 후보로 보관하세요."
+            ),
+            "drill": None,
+            "checkpoint": (
+                "양쪽 손목이 전체 스윙 구간에서 연속 검출되는지 확인합니다."
+                if pose_quality_limited
+                else "임팩트 전후에 club head와 handle 점이 동시에 연속 검출되는지 확인합니다."
+            ),
             "caution": "템포·임팩트·경로 기반 코칭은 제공하지 않습니다.", "theory": "분석 품질: 이벤트 근거가 충돌하면 이벤트 기반 코칭을 보류합니다.",
         }
         safe_findings = [
@@ -2599,6 +2866,7 @@ def analyze_meta(
         "confidence": confidence,
         "analysisQuality": analysis_quality,
         "eventValidation": event_validation,
+        "metricQuality": metric_quality,
         "overlay": overlay,
         "analysisVersion": COACH_ANALYSIS_VERSION,
         "meta": {
@@ -2626,6 +2894,9 @@ def analyze_meta(
             "bodySelectorDebug": body_selector.get("debug") if body_selector.get("available") else None,
             "wristPoints": float(len(wrist_track)),
             "wristSources": wrist_sources,
+            "visibleGripEnabled": visible_grip_enabled,
+            "visibleGripPoints": float(len(grip_track)),
+            "visibleGripSources": grip_sources,
             "wristTopMs": float(wrist_top.get("t")) if wrist_top else None,
             "wristImpactMs": float(wrist_impact.get("t")) if wrist_impact else None,
             "wristFinishMs": float(wrist_finish.get("t")) if wrist_finish else None,

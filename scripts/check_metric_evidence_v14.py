@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from app.services.coach_pipeline import _finalize_metric_evidence  # noqa: E402
+from app.services.coach_pipeline import _finalize_metric_evidence, _metric_quality_item  # noqa: E402
 
 
 def usable_validation() -> dict:
@@ -47,6 +47,21 @@ def main() -> None:
     assert "SHAFT_CONFIDENCE_LOW" in evidence["shaft"]["reasons"]
     assert evidence["ball"]["status"] == "withheld"
     assert validation["metricAvailability"]["impactStability"] == "withheld"
+
+    hidden = _metric_quality_item(
+        {"status": "withheld", "source": "test", "reasons": ["UNSAFE"]},
+        123.4,
+        0.99,
+    )
+    assert hidden["value"] is None
+    assert hidden["status"] == "withheld"
+    reference = _metric_quality_item(
+        {"status": "reference", "source": "test", "reasons": ["REFERENCE_ONLY"]},
+        2.8,
+        0.72,
+    )
+    assert reference["value"] == 2.8
+    assert reference["confidence"] == 0.72
 
     strong_shaft_validation = usable_validation()
     strong_shaft = _finalize_metric_evidence(

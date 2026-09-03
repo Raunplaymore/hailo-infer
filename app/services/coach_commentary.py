@@ -439,6 +439,9 @@ def _body_findings(body_metrics: Dict[str, object]) -> List[CoachFinding]:
     findings: List[CoachFinding] = []
     head = body_metrics.get("headStability")
     if isinstance(head, dict):
+        if str(head.get("status") or "reference") != "confirmed":
+            head = None
+    if isinstance(head, dict):
         label = str(head.get("label") or "")
         movement = _safe_float(head.get("movementRatio"), 0.0)
         confidence = _safe_float(head.get("confidence"), 0.0)
@@ -474,6 +477,9 @@ def _body_findings(body_metrics: Dict[str, object]) -> List[CoachFinding]:
             )
 
     shoulder = body_metrics.get("shoulderTurnProxy")
+    if isinstance(shoulder, dict):
+        if str(shoulder.get("status") or "reference") != "confirmed":
+            shoulder = None
     if isinstance(shoulder, dict):
         label = str(shoulder.get("label") or "")
         delta = shoulder.get("deltaDeg")
