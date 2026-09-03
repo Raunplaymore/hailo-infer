@@ -472,6 +472,27 @@
   - 사용자 production 승인 후 main push/GitHub Actions 확인
   - 코드 health 확인 후 systemd feature flags 적용 및 known-video smoke test
 
+### 2026-09-03 — Production code deploy 및 OpenCV 잔존 패키지 발견
+
+- deployed commit: `af80ba0`
+- GitHub Actions run: `33709587062` success
+- production 확인:
+  - `/health` ok
+  - service active
+  - 54.9°C, throttled `0x0`
+  - feature flags는 아직 OFF
+- 발견:
+  - lock 설치 후에도 기존 `opencv-python==4.12.0.88`이 venv에 잔존
+  - `opencv-contrib-python==4.13.0.92`와 중복 설치 상태
+- 원인:
+  - pip requirements 설치는 lock에 없는 기존 distribution을 제거하지 않음
+- 후속 변경:
+  - deploy workflow가 두 OpenCV wheel을 제거한 뒤 contrib만 재설치
+  - `cv2.__version__ == 4.13.0` 검증 후에만 service restart
+- 현재 운영 영향:
+  - cv2 import는 4.13.0으로 정상
+  - 후속 workflow 배포 전까지 중복 distribution metadata는 남아 있음
+
 ## 검증 증거 추가 형식
 
 각 작업 완료 시 아래 형식으로 이 문서에 추가한다.
