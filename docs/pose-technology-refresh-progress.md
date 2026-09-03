@@ -33,6 +33,7 @@
 | M7-NODE | 필수 | Node 지원 LTS 전환 | Pending | Pi Node 18.20.4, npm 없음; hailo-back/front 별도 repo 작업 필요 | 미배포 |
 | M7-HAILO | 필수 | Hailo compatibility matrix | Completed | Hailo-8 firmware/runtime/driver 4.23.0, TAPPAS 3.31 고정 | 문서만 |
 | M8 | 필수 | metric quality contract | Completed | top-level contract + nullable withheld schema, clean Pi integration PASS | 미배포 |
+| M9 | 필수 | 코칭 유용성·범위 분리 | In progress | reference 후보 회귀 검사, API/UI 빌드 | 로컬 구현 완료·미배포 |
 | O1 | 옵션 | Hailo YOLOv8m Pose | Pending | 동일 corpus benchmark 필요 | 미배포 |
 | O2 | 옵션 | MediaPipe Task API | Pending | legacy side-by-side 필요 | 미배포 |
 | O3 | 옵션 | RTMPose/RTMW reference | Pending | offline accuracy report 필요 | 미배포 |
@@ -145,6 +146,13 @@
   - reference body 값 자체는 결과에 남지만 사용자 교정 finding으로 승격되지 않음
 - rollback: M1/M2 코드 변경만 revert 가능
 - 배포 상태: 미배포
+
+### 2026-09-03 — M9 production rollout 준비
+
+- 운영 flag: `REFERENCE_COACHING_ENABLED=1`
+- 활성 조건: known viewpoint/handedness + pose coverage 0.8 이상 + usable event
+- 자동 차단: pose event source divergence가 있으면 tempo 후보 제외
+- 즉시 rollback: systemd drop-in에서 `REFERENCE_COACHING_ENABLED=0` 후 daemon-reload/restart
 
 ### 2026-09-03 — M1/M2 Pi candidate 검증
 
@@ -502,6 +510,44 @@
 - GitHub Actions가 `/etc/systemd/system/hailo-infer.service.d/pose-refresh.conf`로 설치
 - rollback은 두 값을 `0`으로 변경 후 daemon-reload/restart
 - production 활성화: 사용자 승인 대기
+
+### 2026-09-03 — M9 코칭 유용성·범위 분리
+
+- 문제:
+  - 단일 `adequate` 지표가 스윙 전체가 좋다는 의미처럼 보일 수 있었음
+  - `ball`, `path`, `impact`가 withheld여도 범위 제한 안내가 빠질 수 있었음
+  - 일반 분석 요청이 `viewpoint`와 `handedness`를 전달하지 않았음
+- 정책:
+  - `confirmed`는 교정 액션, `reference`는 조건부 개선 후보, `withheld`는 코칭 금지
+  - `adequate`는 해당 항목의 유지점일 뿐 전체 스윙 평가가 아님
+  - 미평가 구질·경로·임팩트는 `analysis_scope_limited`로 명시
+- 변경 파일:
+  - `app/schemas.py`, `app/main.py`
+  - `app/services/coach_commentary.py`, `app/services/coach_pipeline.py`
+  - `scripts/check_coach_commentary.py`
+  - sibling `hailo-back/server.js`
+  - sibling `hailo-front` 업로드 설정/API/코칭 UI
+  - sibling `hailo-camera/server.js` 자동 촬영 옵션 전달
+- 안전 조건:
+  - reference 코칭은 `REFERENCE_COACHING_ENABLED`로 분리하고 기본값은 off
+  - 알려진 촬영 시점·타석 방향, 충분한 pose coverage, usable event가 모두 필요
+  - pose event source divergence가 있으면 tempo 후보를 만들지 않음
+  - 구질·경로·임팩트 proxy는 계속 withheld
+- 로컬 검증:
+  - `scripts/check_coach_commentary.py` PASS
+  - `scripts/check_metric_evidence_v14.py` PASS
+  - `hailo-back npm run check` PASS
+  - `hailo-front npm run build` PASS
+  - `hailo-camera npm run build:auto` PASS
+  - `hailo-camera npm run test:auto` PASS
+  - Pi candidate 전체 pose/metric/commentary 회귀 PASS
+  - 최신 실제 영상 candidate: 백스윙 유지(reference), 어깨 회전 개선 후보(reference), 분석 범위(scope) 분리 확인
+- 남은 검증:
+  - 실제 영상 A/B 후에만 reference flag 활성화
+- rollback:
+  - flag를 `0`으로 두면 기존 보수적 코칭을 유지
+  - v16 문제가 있으면 이전 commit으로 서비스 롤백
+- 배포 상태: 미배포
 
 ## 검증 증거 추가 형식
 

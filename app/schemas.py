@@ -13,6 +13,9 @@ class Source(BaseModel):
 class JobOptions(BaseModel):
     force: bool = False
     tailFramesForLive: int = 30
+    club: Optional[str] = None
+    viewpoint: Literal["unknown", "down_the_line", "face_on"] = "unknown"
+    handedness: Literal["unknown", "right", "left"] = "unknown"
 
 
 class JobCreateRequest(BaseModel):

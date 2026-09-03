@@ -38,6 +38,15 @@ def _run_job(job_id: str, payload: JobCreateRequest) -> None:
     try:
         if payload.mode == "coach_from_meta":
             meta = load_meta(payload.source.metaPath)
+            # Capture geometry belongs to the request contract.  Older metadata
+            # remains compatible, while an explicit request value takes priority.
+            meta = dict(meta)
+            if payload.options.viewpoint != "unknown":
+                meta["viewpoint"] = payload.options.viewpoint
+            if payload.options.handedness != "unknown":
+                meta["handedness"] = payload.options.handedness
+            if payload.options.club:
+                meta["club"] = payload.options.club
             result = analyze_meta(
                 meta,
                 job_id=job_id,

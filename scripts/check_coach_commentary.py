@@ -8,7 +8,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.services.coach_commentary import build_coach_comments, build_coach_finding_debug
+from app.services.coach_commentary import (
+    build_coach_comments,
+    build_coach_finding_debug,
+    build_reference_coach_findings,
+)
 
 
 def assert_contains(comments: list[str], text: str) -> None:
@@ -376,6 +380,28 @@ def run_summary_priority_invariants() -> None:
         assert_single_primary_pattern(build_coach_finding_debug(*case, suppress_redundant=True))
 
 
+def run_reference_coaching_case() -> None:
+    findings = build_reference_coach_findings(
+        {"backswingMs": 683, "downswingMs": 965, "ratio": 0.71, "status": "reference", "confidence": 0.81},
+        {
+            "shoulderTurnProxy": {
+                "label": "limited",
+                "status": "reference",
+                "confidence": 0.55,
+                "deltaDeg": 6.7,
+            }
+        },
+    )
+    finding_keys = [item.key for item in findings]
+    assert finding_keys == ["tempo_reference_candidate", "shoulder_turn_reference_candidate"]
+    for item in findings:
+        serialized = item.to_dict()
+        assert serialized["evidenceLevel"] == "reference"
+        combined = " ".join(str(serialized.get(key) or "") for key in ("evidence", "interpretation", "action", "caution"))
+        assert "슬라이스 원인" not in combined or "뜻하지 않습니다" in combined
+        assert "확정" in combined
+
+
 if __name__ == "__main__":
     run_fast_low_confidence_case()
     run_stable_neutral_case()
@@ -384,4 +410,5 @@ if __name__ == "__main__":
     run_body_pose_case()
     run_fusion_sequence_cases()
     run_summary_priority_invariants()
+    run_reference_coaching_case()
     print("coach commentary checks passed")

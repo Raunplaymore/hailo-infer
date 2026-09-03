@@ -5,12 +5,15 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from app.services.body_event_selector import select_body_events
-from app.services.coach_commentary import build_coach_comments, build_coach_finding_debug
+from app.services.coach_commentary import (
+    build_coach_comments,
+    build_coach_finding_debug,
+    build_reference_coach_findings,
+)
 
-# v15 adds a separate sustained-motion Takeaway event.  Tempo must begin at
-# the first observable backswing movement, not at the first frame of setup.
-# Bump the version so Pi caches are recomputed with the corrected time origin.
-COACH_ANALYSIS_VERSION = "hailo-coach-service7-v15"
+# v16 adds an opt-in reference coaching lane and explicit capture geometry.
+# The lane never promotes path, ball flight, or impact proxies to diagnoses.
+COACH_ANALYSIS_VERSION = "hailo-coach-service7-v16"
 
 SERVICE7_LABELS = {
     0: "person",
@@ -2390,6 +2393,9 @@ def analyze_meta(
         coordinate_y_scale=coordinate_y_scale,
     )
     viewpoint = _normalize_viewpoint(meta.get("viewpoint") or (body_artifact or {}).get("viewpoint"))
+    handedness = str(meta.get("handedness") or (body_artifact or {}).get("handedness") or "unknown").lower()
+    if handedness not in {"right", "left"}:
+        handedness = "unknown"
 
     # The body decoder receives source-space tracks because its pose keypoints
     # live in that same coordinate system.  Downstream club geometry, however,
@@ -2669,6 +2675,7 @@ def analyze_meta(
         },
     }
 
+    tempo = {**tempo, "status": metric_evidence["tempo"]["status"], "comment": "Takeaway부터 Top까지의 백스윙과 Top부터 Impact까지의 관측 시간 비율이며 전환 순서를 직접 증명하지 않습니다."}
     tempo_for_coach: Dict[str, object] = {}
     shaft_for_coach = shaft if metric_evidence["shaft"]["status"] == "confirmed" else {"label": "withheld"}
     backswing_for_coach = (
@@ -2709,8 +2716,54 @@ def analyze_meta(
         fusion_for_coach,
         suppress_redundant=True,
     )
+    if metric_evidence["backswing"]["status"] == "reference":
+        for finding in coach_findings:
+            if finding.get("category") == "backswing":
+                finding["evidenceLevel"] = "reference"
+                finding["confidence"] = min(_safe_float(finding.get("confidence"), 0.0), 0.55)
+                finding["caution"] = "단일 카메라의 2D 참고값이며 스윙 전체 평가가 아닙니다."
 
-    tempo = {**tempo, "status": metric_evidence["tempo"]["status"], "comment": "Takeaway부터 Top까지의 백스윙과 Top부터 Impact까지의 관측 시간 비율이며 전환 순서를 직접 증명하지 않습니다."}
+    reference_coaching_enabled = os.getenv("REFERENCE_COACHING_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
+    capture_geometry_known = viewpoint in {"down_the_line", "face_on"} and handedness in {"right", "left"}
+    pose_ready_for_reference = pose_coverage >= 0.8 and event_validation.get("status") == "usable"
+    if reference_coaching_enabled and capture_geometry_known and pose_ready_for_reference:
+        reference_tempo = (
+            {}
+            if "POSE_EVENT_SOURCE_DIVERGENCE" in event_validation.get("warnings", [])
+            else {**tempo, "confidence": event_coverage}
+        )
+        reference_findings = build_reference_coach_findings(reference_tempo, body_metrics)
+        coach_findings.extend(finding.to_dict() for finding in reference_findings)
+        coach_summary.extend(finding.comment() for finding in reference_findings)
+
+    unavailable_labels = []
+    if metric_evidence["ball"]["status"] == "withheld":
+        unavailable_labels.append("구질")
+    if metric_evidence["path"]["status"] == "withheld":
+        unavailable_labels.append("스윙 경로")
+    if metric_evidence["impact"]["status"] == "withheld":
+        unavailable_labels.append("임팩트")
+    if unavailable_labels:
+        scope_finding = {
+            "key": "analysis_scope_limited",
+            "category": "quality",
+            "severity": "info",
+            "confidence": 1.0,
+            "priority": "분석 범위",
+            "evidence": f"이번 분석에서는 {'·'.join(unavailable_labels)} 항목을 확정하지 못했습니다.",
+            "interpretation": "확인된 유지 항목이 스윙 전체가 좋다는 뜻은 아닙니다.",
+            "action": "표시된 유지점과 개선 후보만 적용하고, 구질 원인은 추가 근거가 확보될 때까지 단정하지 마세요.",
+            "drill": None,
+            "checkpoint": "촬영 시점과 좌우 타석 정보가 정확한지 확인합니다.",
+            "caution": "슬라이스 여부와 원인은 현재 결과에 포함되지 않습니다.",
+            "evidenceLevel": "scope",
+            "theory": "분석 범위: 평가하지 못한 항목과 정상으로 관측된 항목을 분리합니다.",
+        }
+        coach_findings.append(scope_finding)
+        coach_summary.append(
+            f"[분석 범위] 이번 분석에서는 {'·'.join(unavailable_labels)} 항목을 확정하지 못했습니다. 확인된 유지 항목은 스윙 전체 평가가 아닙니다."
+        )
+
     if metric_evidence["path"]["status"] == "withheld":
         swing_plane = {
             "label": "withheld",
@@ -2884,6 +2937,8 @@ def analyze_meta(
             "takeawayProfile": profile_name,
             "takeawayProfileConfig": takeaway_config,
             "viewpoint": viewpoint or "unknown",
+            "handedness": handedness,
+            "referenceCoachingEnabled": reference_coaching_enabled,
             "bodySelectorMethod": body_selector.get("method") if body_selector.get("available") else None,
             "bodySelectorUsed": bool(use_body_selector),
             "eventSegmentationConfidence": decoder_confidence,

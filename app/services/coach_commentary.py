@@ -25,6 +25,7 @@ class CoachFinding:
     drill: Optional[str] = None
     checkpoint: Optional[str] = None
     caution: Optional[str] = None
+    evidence_level: str = "confirmed"
 
     def comment(self) -> str:
         parts = [f"[{self.priority}] {self.evidence}", self.interpretation, self.action]
@@ -49,6 +50,7 @@ class CoachFinding:
             "drill": self.drill,
             "checkpoint": self.checkpoint,
             "caution": self.caution,
+            "evidenceLevel": self.evidence_level,
             "theory": _theory_for(self.key, self.category),
         }
 
@@ -501,6 +503,56 @@ def _body_findings(body_metrics: Dict[str, object]) -> List[CoachFinding]:
                 )
             )
     return findings
+
+
+def build_reference_coach_findings(
+    tempo: Dict[str, object],
+    body_metrics: Dict[str, object],
+) -> List[CoachFinding]:
+    """Return low-risk practice candidates without promoting 2D proxies to facts."""
+    findings: List[CoachFinding] = []
+    ratio = _safe_float(tempo.get("ratio"), 0.0)
+    if str(tempo.get("status") or "") == "reference" and ratio > 0 and (ratio < 1.7 or ratio > 4.5):
+        findings.append(
+            CoachFinding(
+                key="tempo_reference_candidate",
+                category="tempo",
+                severity="medium",
+                confidence=min(_safe_float(tempo.get("confidence"), 0.45), 0.55),
+                evidence="백스윙과 다운스윙의 시간 배분이 한쪽으로 치우쳐 관측됐습니다.",
+                interpretation="이벤트 시점이 참고 수준이므로 리듬 문제를 확정하지 않고 다음 스윙에서 다시 확인합니다.",
+                action="같은 속도의 빈스윙을 반복해 전환이 급해지거나 멈추지 않는 리듬을 만들어 보세요.",
+                priority="개선 후보",
+                drill="힘을 절반으로 낮춘 연속 빈스윙 3회 후 같은 리듬으로 공을 칩니다.",
+                checkpoint="다음 촬영에서도 백스윙과 다운스윙의 시간 배분이 비슷하게 나타나는지 확인합니다.",
+                caution="2D 이벤트 타이밍 참고값이며 슬라이스 원인을 뜻하지 않습니다.",
+                evidence_level="reference",
+            )
+        )
+
+    shoulder = body_metrics.get("shoulderTurnProxy")
+    if isinstance(shoulder, dict):
+        status = str(shoulder.get("status") or "")
+        label = str(shoulder.get("label") or "")
+        confidence = _safe_float(shoulder.get("confidence"), 0.0)
+        if status == "reference" and label == "limited" and confidence >= 0.5:
+            findings.append(
+                CoachFinding(
+                    key="shoulder_turn_reference_candidate",
+                    category="body",
+                    severity="medium",
+                    confidence=min(confidence, 0.55),
+                    evidence="백스윙 구간의 어깨선 변화가 작게 관측됐습니다.",
+                    interpretation="단일 카메라의 2D 신호이므로 실제 회전 부족을 확정하지 않고 개선 후보로 봅니다.",
+                    action="팔을 더 들기보다 편안한 범위에서 가슴과 어깨가 함께 돌아가는 느낌을 확인하세요.",
+                    priority="개선 후보",
+                    drill="클럽을 가슴에 대고 통증 없는 범위에서 천천히 3/4 회전하는 동작을 5회 반복합니다.",
+                    checkpoint="다음 영상에서도 어깨선 변화가 작게 관측되는지 비교합니다.",
+                    caution="카메라 시점에 영향을 받는 2D 참고 신호이며 구질이나 원인을 확정하지 않습니다.",
+                    evidence_level="reference",
+                )
+            )
+    return _rank_findings(findings)
 
 
 def _fusion_findings(fusion_metrics: Dict[str, object]) -> List[CoachFinding]:
