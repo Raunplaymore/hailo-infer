@@ -43,6 +43,10 @@ uvicorn app.main:app --host 0.0.0.0 --port 3002
 설정하고 서비스를 재시작하면 코드 rollback 없이 기존 동작으로 복귀합니다. 가려진 손목의 장기
 구간은 생성하거나 보간하지 않으며, 양손 관측이 필요한 지표만 별도로 보류합니다.
 
+운영 기본값은 `systemd/hailo-infer-pose-refresh.conf` drop-in으로 관리합니다. 긴급 rollback은
+Pi의 `/etc/systemd/system/hailo-infer.service.d/pose-refresh.conf`에서 두 값을 `0`으로 바꾼 뒤
+`sudo systemctl daemon-reload && sudo systemctl restart hailo-infer`를 실행합니다.
+
 ## API
 
 ### Health Check

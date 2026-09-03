@@ -493,6 +493,16 @@
   - cv2 import는 4.13.0으로 정상
   - 후속 workflow 배포 전까지 중복 distribution metadata는 남아 있음
 
+### 2026-09-03 — Pose refresh production activation 준비
+
+- systemd drop-in: `systemd/hailo-infer-pose-refresh.conf`
+- 활성값:
+  - `BODY_POSE_TARGET_FPS=30`
+  - `VISIBLE_GRIP_TRACK_ENABLED=1`
+- GitHub Actions가 `/etc/systemd/system/hailo-infer.service.d/pose-refresh.conf`로 설치
+- rollback은 두 값을 `0`으로 변경 후 daemon-reload/restart
+- production 활성화: 사용자 승인 대기
+
 ## 검증 증거 추가 형식
 
 각 작업 완료 시 아래 형식으로 이 문서에 추가한다.

@@ -93,6 +93,8 @@ jobs:
             .venv/bin/python -m pip install -r requirements.lock.txt && \
             .venv/bin/python -m pip check && \
             .venv/bin/python -c 'import cv2; assert cv2.__version__ == \"4.13.0\"' && \
+            sudo install -d /etc/systemd/system/hailo-infer.service.d && \
+            sudo cp /home/ray/hailo-infer/systemd/hailo-infer-pose-refresh.conf /etc/systemd/system/hailo-infer.service.d/pose-refresh.conf && \
             sudo cp /home/ray/hailo-infer/systemd/hailo-infer-healthcheck.service /etc/systemd/system/ && \
             sudo cp /home/ray/hailo-infer/systemd/hailo-infer-healthcheck.timer /etc/systemd/system/ && \
             sudo systemctl daemon-reload && \
