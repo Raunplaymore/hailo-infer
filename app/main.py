@@ -12,6 +12,8 @@ from app.schemas import (
     ClubPreprocessLabResponse,
     HealthResponse,
     ImpactReviewRequest,
+    PracticeReviewRequest,
+    PracticeFramesRequest,
     JobCreateRequest,
     JobCreateResponse,
     JobStatusResponse,
@@ -23,6 +25,7 @@ from app.services.impact_review import REVIEW_LOCK, review_impact
 from app.services.job_store import JobStore
 from app.services.meta_loader import MetaLoadError, load_meta
 from app.services.result_completion import is_complete_coach_result
+from app.services.practice_review import review_saved_body, preview_saved_body
 
 APP_VERSION = "0.1.0"
 
@@ -283,3 +286,21 @@ def impact_review(payload: ImpactReviewRequest) -> dict:
         raise HTTPException(status_code=400, detail="임팩트 후보를 만들 수 없습니다. 영상과 자세 입력을 확인해 주세요.") from exc
     finally:
         REVIEW_LOCK.release()
+
+
+@app.post("/v1/practice-review")
+def practice_review(payload: PracticeReviewRequest) -> dict:
+    try:
+        return review_saved_body(settings, payload)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="저장된 자세 분석이 없습니다. 영상을 먼저 분석해 주세요.") from exc
+    except (ValueError, OSError, TypeError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail="선택 구간 또는 영상과 자세 분석의 연결을 확인할 수 없습니다. 영상을 다시 분석하고 장면을 선택해 주세요.") from exc
+
+
+@app.post("/v1/practice-preview")
+def practice_preview(payload: PracticeFramesRequest) -> dict:
+    try:
+        return preview_saved_body(settings, payload)
+    except (ValueError, OSError, TypeError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail="저장된 영상의 자세 비교를 준비하지 못했습니다.") from exc

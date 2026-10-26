@@ -35,6 +35,11 @@ jobs:
         run: |
           python scripts/test_impact_review.py
 
+      - name: Check saved-video posture review
+        run: |
+          python scripts/check_practice_review.py
+          python scripts/check_movement_guide.py
+
       - name: Check coach commentary rules
         run: |
           PYTHONPYCACHEPREFIX=/tmp/hailo_pycache python -m py_compile app/services/coach_commentary.py scripts/check_coach_commentary.py scripts/preview_coach_findings.py
@@ -83,9 +88,13 @@ jobs:
           test -s ~/.ssh/known_hosts
           ssh -o StrictHostKeyChecking=yes -o BatchMode=yes "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" "echo ssh-ok"
 
+      - name: Back up current application
+        run: |
+          ssh "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}" "mkdir -p /home/ray/hailo-infer-backups/${{ github.sha }} && cp -a /home/ray/hailo-infer/app /home/ray/hailo-infer-backups/${{ github.sha }}/ && cp /home/ray/hailo-infer/requirements.lock.txt /home/ray/hailo-infer-backups/${{ github.sha }}/"
+
       - name: Deploy via rsync
         run: |
-          rsync -az --delete --exclude '.venv' --exclude '.git' ./ "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}:${{ secrets.PI_PATH }}"
+          rsync -az --delete --exclude '.venv' --exclude '.git' --exclude '.env' --exclude '.env.*' --exclude 'data/' --exclude 'uploads/' --exclude 'logs/' ./ "${{ secrets.PI_USER }}@${{ secrets.PI_HOST }}:${{ secrets.PI_PATH }}"
 
       - name: Restart service
         run: |

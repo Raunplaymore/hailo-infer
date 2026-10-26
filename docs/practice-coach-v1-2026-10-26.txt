@@ -1,0 +1,56 @@
+DTL 자세 연습 v1 — 2026-10-26
+
+이번 구현
+- 새 POST /v1/practice-review는 기존 자세 JSON만 읽는다. 추가 추론/재학습/영상 변환 없음.
+- backend POST /api/analyze/:jobId/practice-review는 클라이언트 경로를 무시하고 저장된 job의 영상/자세를 사용한다.
+- 브라우저가 본 review-video의 hash가 있으면 같은 캐시 입력을 사용하며 파일 size/mtime 변화와 hash 불일치를 거부한다.
+- infer는 허용 경로, jobId, 영상 경로, 자세 파일의 신선도를 확인한다.
+- 기존 analysisVersion, 이벤트, 후보, 코칭 결과, 학습 라벨은 수정하지 않는다.
+
+사용 흐름
+1. 분석 영상에서 스윙 전 어드레스와 임팩트 직전 장면을 각각 직접 선택.
+2. 고정 DTL 카메라의 완전한 스윙이고 두 장면/어깨·골반 표시를 확인했음을 체크.
+3. 측정 가능한 경우 두 구간의 화면상 몸통 기울기와 근거 장면을 제공.
+4. 큰 감소가 검출되면 확인 후보만 제시. 원본에도 변화가 보인다는 사용자 확인 후 작은 스윙 연습을 제공.
+5. 연습 전 기준을 이 브라우저에 명시적으로 저장. 다음 영상에서 같은 골퍼/클럽/촬영 위치/완전한 스윙 구간을 확인한 뒤 수치 비교.
+6. 보류 결과, 같은 영상, 다른 관절 쪽, 다른 버전, 손상된 기준 데이터는 비교 금지. 기준 삭제 지원.
+
+측정 정의
+- 양쪽 어깨/골반 중 두 구간 모두 안정적으로 관측된 동일한 쪽을 사용.
+- normalized x/y에 실제 width/height를 곱한 뒤 수직선과 어깨-골반 선의 각도 계산.
+- 선택 시점 ±65ms에서 confidence>=.65의 observed 표본 최소3개, 가장 가까운 표본40ms 이내.
+- 중복 시간,70ms 초과 공백,8도 초과 구간내 각도범위는 보류.
+- 어드레스의 투영각10~65도, 구간간 몸통 투영길이비0.8~1.2를 요구.
+- 양쪽 모두 측정되지만 변화량 차이가8도 넘으면 보류.
+- changeDeg=어드레스 각도-임팩트 직전 각도. 12도 이상이면 review_candidate.
+
+제한
+위 수치들은 보수적인 초기 검수 조건이며 전문가 라벨로 보정한 정상/이상 기준이 아니다.
+이 기능은 수동 선택한 두 구간의 2D 관측 비교다. 실제3D얼리익스텐션, 체중이동, 구질 원인이나 교정 효과를 확정하지 않는다.
+드릴은 가벼운 실험적 연습 안내이며 특정 골퍼에게 효과가 입증된 처방이 아니다.
+다음 촬영은 하프스윙 연습 자체가 아니라 처음과 같은 완전한 스윙으로 한다. 수치 감소만으로 타구 개선을 판정하지 않는다.
+관절 confidence는 자세 추정 모델의 관측 지표이며 코칭 정답 확률로 표시하지 않는다.
+고정 카메라/정확한 구간 선택은 사용자 확인에 의존한다. 카메라 이동을 자동 검출하지 않는다.
+
+검증
+- scripts/check_practice_review.py: 비율/미러링/좌우일관성/가림/NaN/보간/시간순서/희소표본/중복/흔들림/파일정체성/신선도 검증.
+- Pi 후보 경로 /tmp/hailo-practice-candidate.buECjR 에서 새 검증과 기존 body sampling, pose metrics, event selector, ROI motion, metric evidence, coach commentary 검사 통과.
+- Pi 후보 FastAPI /health 및 실제 저장 입력 HTTP 계약 검증 통과. 후보 서버는 검증 후 종료.
+- IMG_5751 검증 입력200ms/2825ms에서34.0도→23.7도,10.3도 변화. no_clear_change 반환. 진단 정답 표본이 아닌 API/계산 실행 사례.
+- backend npm run check 통과, 새 route의 입력/파일/hash/진행상태/실패 응답 검증 포함.
+- front typecheck, check:practice-coach, check:impact-review, production build 통과.
+- 브라우저 테스트 데이터 화면: 선택→확인→후보→연습→기준저장→다음영상 초기화→동일조건확인→전후표시→기준삭제→재생불가 차단 확인.
+- 브라우저 테스트는 컴포넌트 검증용 데이터이며 실제 영상의 전후 개선 결과가 아니다.
+
+배포 상태
+운영 수동 배포 완료: practice-20261026-r1. 커밋/푸시 안 함.
+infer → backend → frontend 순서로 적용, 기존 성능·업로드 수정 유지.
+이전 release: backend performance-20261026-r1, frontend performance-20261026-r2.
+Pi rollback 자료: /home/ray/hailo-practice-20261026-r1 (환경 설정은 민감정보 포함, 공유 금지).
+운영 검증에서 발견한 오래된 shot.running 상태는 분석 캐시 상태를 우선하여 해결. 실제 pending/running은 계속 차단하며 회귀 검사 추가.
+운영 프론트 프록시를 통한 실제 IMG_5751 자세 비교 HTTP 성공(no_clear_change, 10.3도).
+동일 영상 Range 요청 206/video/mp4 확인. infer active, throttled=0x0.
+배포 전 기존 분석/자세/임팩트/라벨 JSON 399개 hash와 배포 후 비교: 변경 0개.
+운영 증거: /home/ray/hailo-practice-20261026-r1/production-verification.json.
+
+운영 브라우저: IMG_5751 원본 재생, 0.200초/2.820초 수동 선택, 촬영 조건 확인, 자세 비교 응답과 근거 버튼 표시 확인. production-coach.png 저장.

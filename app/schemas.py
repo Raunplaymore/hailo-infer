@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Source(BaseModel):
@@ -29,6 +29,27 @@ class JobCreateResponse(BaseModel):
     ok: bool
     jobId: str
     status: Literal["queued", "running", "succeeded", "failed", "canceled"]
+
+
+class PracticeFramesRequest(BaseModel):
+    impactMs: Optional[float] = Field(default=None, ge=0, le=30000, allow_inf_nan=False, strict=True)
+    jobId: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    inputPath: str
+    bodyPath: str
+    addressMs: float = Field(ge=0, le=30000, allow_inf_nan=False, strict=True)
+    comparisonMs: float = Field(ge=0, le=30000, allow_inf_nan=False, strict=True)
+    viewpoint: Literal["down_the_line"]
+
+
+class PracticeReviewRequest(PracticeFramesRequest):
+    confirmedFrames: Literal[True]
+
+    @field_validator("confirmedFrames", mode="before")
+    @classmethod
+    def require_explicit_confirmation(cls, value):
+        if value is not True:
+            raise ValueError("장면 확인이 필요합니다.")
+        return value
 
 
 class JobStatusResponse(BaseModel):

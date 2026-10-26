@@ -1,0 +1,46 @@
+코칭 UX / 재생 성능 수정 — 운영 배포 완료
+
+원인
+- 임팩트 응답의 hash가 도착하면 video src/key가 달라져 영상 재로드, 자동 후보 seek 발생.
+- metadata preload 및 드래그 중 연속 seek가 느린 네트워크에서 사용자 조작 지연을 키움.
+- 2.28MB 영상: Pi 내부 HTTP 1MB 10ms, 개발 머신 SSH 전송 전체 24.29초. 사용자의 iPhone 네트워크는 직접 측정하지 않음.
+- 준비 0ms는 주변 표본이 부족할 수 있는데 사용자는 두 장면 선택/확인을 완료한 뒤에야 보류를 받음.
+
+변경
+- 영상 URL을 job 기준으로 유지. 임팩트 결과 도착 시 자동 점프 제거.
+- 영상 자동 preload, 드래그 종료 때 한 번 seek, buffering 표시.
+- 640px 이하 H264 재생본을 저장·재사용. 원본 화질 전환 가능.
+- 한 번에 변환 하나/동일 파일 중복 제거/실패 시 원본. 원본 분석·라벨·추론 데이터는 변경하지 않음.
+- 원본 timebase 및 프레임 시점 유지. 첫 재생본 생성에는 수 초가 들 수 있음.
+- 기존 자세에서 가까운 비교 가능 구간을 사전 탐색. 각도 변화가 큰 구간을 우선 고르지 않음.
+- preview endpoint는 장면 후보만 반환. 수치/코칭/연습을 반환하지 않음.
+- 사용자가 두 장면을 보고 비교를 눌러야 코칭 API 실행. 체크박스/수동 저장은 기본 흐름에서 제거.
+- 코칭 카드를 영상 바로 아래로 이동. 직접 조정은 접어둠. 측정 불가와 연결 오류 구분.
+
+검증
+- Pi 후보 /tmp/hailo-practice-candidate.buECjR: 새/기존 자세 검사, body sampling/pose metrics/event selector/ROI motion/metric evidence/coach commentary 통과.
+- 후보 HTTP preview 정상, confirmation 없이 review 거부, 원본 결과 및 실패 응답 회귀 통과. 후보 서버는 종료.
+- 최근6개: 후보 준비5개/불가1개. 준비 함수 약1.9~9.0ms. 골프 진단 정확도 검증이 아님.
+- 실제6개 경량 변환: 89.2~96.9% 감소, 프레임수/시점 동일(최대오차0ms).
+- backend 전체check, playback copy 원본 보존·캐시·동시실행제한·실패fallback 및 HTTP range/original 선택 통과.
+- front typecheck, practice/impact UI contract, build 통과.
+- 390px 폭 후보 브라우저: 실제 저장 영상 + Pi에서 얻은 API 응답 재현. 두 장면 보기→비교 결과, 영상과 버튼 위치 확인. 실제 iPhone Safari/터치/실제사용자망 속도 미검증.
+
+배포 준비
+- /tmp/hailo-practice-ux-release.tgz (infer3파일/backend server+storage모듈/frontend dist)
+- 의존 순서 infer → backend → frontend. .env, 업로드, 결과/라벨, 의존성은 제외.
+- 현재 운영 front/back: practice-20261026-r1. 적용 전 infer3파일도 백업 후 새release로 적용해야 함.
+- 롤백은 위 기존release 링크 복구 및 infer 백업 복원.
+- 후보 검증 시점에는 미배포. 이후 아래 사용자 승인으로 운영 적용 완료. 커밋/푸시는 하지 않음.
+
+
+운영 적용 완료 (사용자 승인: 적용해봐라)
+- release practice-ux-20261026-r1, infer → backend → frontend 수동 배포.
+- 백업 /home/ray/hailo-practice-ux-20261026-r1, 이전 front/back release practice-20261026-r1 유지.
+- 운영 proxy HTTP: preview ready, 미확인 review 400, 확인 후 실제 비교 응답 정상.
+- 경량 영상 247220 bytes, 원본 2279994 bytes, 양쪽 range206/video/mp4 검증.
+- 운영 내부 최초 경량 생성+응답2.814초, 캐시 hit range응답0.010초. 사용자 휴대폰 재생시간 측정치는 아님.
+- 기존 JSON402개 hash 변경0, infer active, throttled=0x0.
+
+- 운영 브라우저 IMG_5741: 영상 로드, 준비/직전 장면 확인, 실제 비교 API 응답 표시 확인. production-coach.png 기록.
+- 개발 머신의 같은 SSH 경로 전체 전송 단일 측정: 적용 전2279994bytes/24.290초 → 적용 후247220bytes/7.673초. 네트워크 변동이 있어 사용자망/재생 시작 지연의 보장 수치가 아님.
