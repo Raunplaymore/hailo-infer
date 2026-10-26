@@ -40,6 +40,26 @@ class ImpactReviewChecks(unittest.TestCase):
             self.assertEqual(source.read_bytes(), b'source-video')
             self.assertNotIn('topMs', json.dumps(result))
 
+    def test_dense_body_reuse_without_original_mutation(self):
+        import os
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Settings()
+            settings.upload_dir = Path(temp) / "uploads"
+            settings.data_dir = Path(temp) / "data"
+            settings.upload_dir.mkdir(); settings.data_dir.mkdir()
+            source = settings.upload_dir / "swing.mp4"; source.write_bytes(b"video")
+            body = settings.data_dir / "dense.json"
+            content = {"source": {"inputPath": str(source)}, "meta": {"sampleMode": "target_fps", "sampleTargetFps": 30}}
+            body.write_text(json.dumps(content)); os.utime(body, ns=(source.stat().st_mtime_ns+1000000,)*2)
+            before = body.read_bytes()
+            with patch.object(review, "source_frames", return_value=(30,[0,33.333,66.667,100])), \
+                 patch.object(review, "analyze_body_video") as extract, \
+                 patch.object(review, "predict", return_value={"events":{"impactMs":67}}):
+                result = review.review_impact(settings,"job",str(source),str(body),False)
+            extract.assert_not_called()
+            self.assertFalse(result["inputScopeConfirmed"])
+            self.assertEqual(before,body.read_bytes())
+
     def test_outside_root_rejected_before_video_read(self):
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / 'outside.mp4'
@@ -60,6 +80,8 @@ class ImpactReviewChecks(unittest.TestCase):
             ImpactReviewRequest(jobId="../bad", inputPath="/tmp/video", confirmedInput=True)
         with self.assertRaises(ValidationError):
             ImpactReviewRequest(jobId="valid", inputPath="/tmp/video", confirmedInput=False)
+        automatic = ImpactReviewRequest(jobId="valid", inputPath="/tmp/video", automatic=True)
+        self.assertFalse(automatic.confirmedInput)
         payload = ImpactReviewRequest(jobId="valid", inputPath="/tmp/video", confirmedInput=True)
         main.REVIEW_LOCK.acquire()
         try:

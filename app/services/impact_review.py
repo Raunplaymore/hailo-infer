@@ -44,7 +44,7 @@ def source_frames(source):
     return fps, [round(t - times[0], 3) for t in times]
 
 
-def review_impact(settings, job_id, input_path):
+def review_impact(settings, job_id, input_path, body_path=None, input_confirmed=True):
     source = Path(input_path).resolve(strict=True)
     roots = (settings.upload_dir.resolve(), settings.data_dir.resolve())
     if not any(source.is_relative_to(root) for root in roots) or not source.is_file():
@@ -56,20 +56,33 @@ def review_impact(settings, job_id, input_path):
     isolated = copy.copy(settings)
     isolated.data_dir = settings.data_dir / "impact-review" / digest
     isolated.body_pose_target_fps = 30
-    body_result = analyze_body_video(
-        settings=isolated, job_id="pose", filename=source.name,
-        input_path=str(source), force=False,
-    )
-    body = json.loads(Path(body_result["bodyPath"]).read_text())
+    body = None
+    if body_path:
+        cached_path = Path(body_path).resolve(strict=True)
+        if not cached_path.is_relative_to(settings.data_dir.resolve()):
+            raise ValueError("허용된 자세 입력이 아닙니다.")
+        cached = json.loads(cached_path.read_text())
+        meta = cached.get("meta") or {}
+        if (Path(cached.get("source", {}).get("inputPath", "")).resolve() == source
+                and meta.get("sampleMode") == "target_fps"
+                and meta.get("sampleTargetFps") == 30
+                and cached_path.stat().st_mtime_ns >= source.stat().st_mtime_ns):
+            body = cached
+    if body is None:
+        body_result = analyze_body_video(
+            settings=isolated, job_id="pose", filename=source.name,
+            input_path=str(source), force=False,
+        )
+        body = json.loads(Path(body_result["bodyPath"]).read_text())
     prediction = predict(body, MODEL)
     frame = round(prediction["events"]["impactMs"] * fps / 1000)
     if not 0 <= frame < len(times):
         raise ValueError("임팩트 후보가 영상 범위를 벗어났습니다.")
-    # shortcut: single right-handed DTL full swing is user-declared; add a validated rejection model before automatic use.
+    # shortcut: automatic candidates assume one right-handed DTL swing; validate input rejection before coaching use.
     return {
         "ok": True, "jobId": job_id, "status": "reference_candidate",
         "model": "pose-tcn-v1", "modelSha256": MODEL_SHA256, "videoSha256": digest,
-        "requiresHumanConfirmation": True, "publicValue": None,
+        "requiresHumanConfirmation": True, "inputScopeConfirmed": bool(input_confirmed), "publicValue": None,
         "automaticCoachingReady": False, "appliedToPrimary": False,
         "candidate": {"frameIndex": frame, "timeMs": times[frame]},
         "frameTimesMs": times,

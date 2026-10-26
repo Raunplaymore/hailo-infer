@@ -278,7 +278,7 @@ def impact_review(payload: ImpactReviewRequest) -> dict:
     if not REVIEW_LOCK.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="다른 임팩트 검수가 진행 중입니다. 잠시 후 다시 시도해 주세요.")
     try:
-        return review_impact(settings, payload.jobId, payload.inputPath)
+        return review_impact(settings, payload.jobId, payload.inputPath, payload.bodyPath, payload.confirmedInput)
     except (ValueError, OSError, BodyPipelineError, subprocess.SubprocessError) as exc:
         raise HTTPException(status_code=400, detail="임팩트 후보를 만들 수 없습니다. 영상과 자세 입력을 확인해 주세요.") from exc
     finally:

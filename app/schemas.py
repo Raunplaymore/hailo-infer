@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class Source(BaseModel):
@@ -247,4 +247,12 @@ class ClubSidecarResponse(BaseModel):
 class ImpactReviewRequest(BaseModel):
     jobId: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
     inputPath: str
-    confirmedInput: Literal[True]
+    confirmedInput: bool = False
+    automatic: bool = False
+    bodyPath: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_request_mode(self):
+        if not self.confirmedInput and not self.automatic:
+            raise ValueError("Explicit confirmation or automatic candidate mode required")
+        return self
