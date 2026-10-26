@@ -31,6 +31,10 @@ jobs:
         run: |
           if [ -d tests ]; then pytest -q; else echo "no tests"; fi
 
+      - name: Check impact review
+        run: |
+          python scripts/test_impact_review.py
+
       - name: Check coach commentary rules
         run: |
           PYTHONPYCACHEPREFIX=/tmp/hailo_pycache python -m py_compile app/services/coach_commentary.py scripts/check_coach_commentary.py scripts/preview_coach_findings.py

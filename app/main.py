@@ -1,3 +1,5 @@
+import subprocess
+
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 
 from app.core.config import Settings
@@ -9,6 +11,7 @@ from app.schemas import (
     ClubPreprocessLabRequest,
     ClubPreprocessLabResponse,
     HealthResponse,
+    ImpactReviewRequest,
     JobCreateRequest,
     JobCreateResponse,
     JobStatusResponse,
@@ -16,6 +19,7 @@ from app.schemas import (
 from app.services.body_pipeline import BodyPipelineError, analyze_body_video
 from app.services.club_preprocess_lab import ClubPreprocessLabError, run_club_preprocess_lab
 from app.services.coach_pipeline import COACH_ANALYSIS_VERSION, CoachError, analyze_meta
+from app.services.impact_review import REVIEW_LOCK, review_impact
 from app.services.job_store import JobStore
 from app.services.meta_loader import MetaLoadError, load_meta
 from app.services.result_completion import is_complete_coach_result
@@ -267,3 +271,15 @@ def result(job_id: str) -> dict:
             "analysisVersion": "hailo-coach-v1",
         },
     }
+
+
+@app.post("/v1/impact-review")
+def impact_review(payload: ImpactReviewRequest) -> dict:
+    if not REVIEW_LOCK.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="다른 임팩트 검수가 진행 중입니다. 잠시 후 다시 시도해 주세요.")
+    try:
+        return review_impact(settings, payload.jobId, payload.inputPath)
+    except (ValueError, OSError, BodyPipelineError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=400, detail="임팩트 후보를 만들 수 없습니다. 영상과 자세 입력을 확인해 주세요.") from exc
+    finally:
+        REVIEW_LOCK.release()

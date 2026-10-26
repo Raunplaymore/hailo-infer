@@ -242,3 +242,9 @@ class ClubSidecarResponse(BaseModel):
     ok: bool
     jobId: str
     result: Dict[str, Any]
+
+
+class ImpactReviewRequest(BaseModel):
+    jobId: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    inputPath: str
+    confirmedInput: Literal[True]
