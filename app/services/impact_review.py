@@ -51,7 +51,7 @@ def review_impact(settings, job_id, input_path, body_path=None, input_confirmed=
         raise ValueError("허용된 업로드 영상이 아닙니다.")
     if hashlib.sha256(MODEL.read_bytes()).hexdigest() != MODEL_SHA256:
         raise ValueError("검증된 임팩트 후보 모델과 일치하지 않습니다.")
-    fps, times = source_frames(source)
+    _, times = source_frames(source)
     digest = file_sha256(source)
     isolated = copy.copy(settings)
     isolated.data_dir = settings.data_dir / "impact-review" / digest
@@ -75,13 +75,14 @@ def review_impact(settings, job_id, input_path, body_path=None, input_confirmed=
         )
         body = json.loads(Path(body_result["bodyPath"]).read_text())
     prediction = predict(body, MODEL)
-    frame = round(prediction["events"]["impactMs"] * fps / 1000)
-    if not 0 <= frame < len(times):
+    impact_ms = prediction["events"]["impactMs"]
+    if not math.isfinite(impact_ms) or not 0 <= impact_ms <= times[-1]:
         raise ValueError("임팩트 후보가 영상 범위를 벗어났습니다.")
+    frame = min(range(len(times)), key=lambda index: abs(times[index] - impact_ms))
     # shortcut: automatic candidates assume one right-handed DTL swing; validate input rejection before coaching use.
     return {
         "ok": True, "jobId": job_id, "status": "reference_candidate",
-        "model": "pose-tcn-v1", "modelSha256": MODEL_SHA256, "videoSha256": digest,
+        "model": "pose-tcn-v1", "modelSha256": MODEL_SHA256, "videoSha256": digest, "timingRevision": 2,
         "requiresHumanConfirmation": True, "inputScopeConfirmed": bool(input_confirmed), "publicValue": None,
         "automaticCoachingReady": False, "appliedToPrimary": False,
         "candidate": {"frameIndex": frame, "timeMs": times[frame]},

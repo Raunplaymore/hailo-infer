@@ -23,6 +23,7 @@ from app.services.club_preprocess_lab import ClubPreprocessLabError, run_club_pr
 from app.services.coach_pipeline import COACH_ANALYSIS_VERSION, CoachError, analyze_meta
 from app.services.impact_review import REVIEW_LOCK, review_impact
 from app.services.job_store import JobStore
+from app.services.club_observation import observe
 from app.services.meta_loader import MetaLoadError, load_meta
 from app.services.result_completion import is_complete_coach_result
 from app.services.practice_review import review_saved_body, preview_saved_body
@@ -172,17 +173,21 @@ def create_club_preprocess_lab(payload: ClubPreprocessLabRequest) -> ClubPreproc
 def analyze_club_sidecar(payload: ClubSidecarRequest) -> ClubSidecarResponse:
     """Analyze V2 club-only metadata without writing or replacing a primary job."""
     try:
-        return ClubSidecarResponse(
-            ok=True,
-            jobId=payload.jobId,
-            result=analyze_meta(
-                load_meta(payload.metaPath),
-                job_id=payload.jobId,
-                force=False,
-                body_path=payload.bodyPath,
-                takeaway_profile=payload.takeawayProfile,
-            ),
+        result = analyze_meta(
+            load_meta(payload.metaPath), job_id=payload.jobId, force=False,
+            body_path=payload.bodyPath, takeaway_profile=payload.takeawayProfile,
         )
+        if payload.impactMs is not None:
+            try:
+                observation = observe(result, payload.impactMs)
+                result["clubObservations"] = {
+                    "status": observation["status"], "automaticCoachingReady": False,
+                    "revision": 1, "levels": observation["matchedGripHeights"],
+                }
+            except ValueError as exc:
+                result["clubObservations"] = {"status": "withheld", "revision": 1,
+                    "automaticCoachingReady": False, "reason": str(exc), "levels": []}
+        return ClubSidecarResponse(ok=True, jobId=payload.jobId, result=result)
     except (CoachError, MetaLoadError) as exc:
         error_code = exc.code if isinstance(exc, CoachError) else "META_LOAD_FAILED"
         raise HTTPException(

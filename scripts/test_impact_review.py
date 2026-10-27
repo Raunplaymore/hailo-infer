@@ -40,6 +40,27 @@ class ImpactReviewChecks(unittest.TestCase):
             self.assertEqual(source.read_bytes(), b'source-video')
             self.assertNotIn('topMs', json.dumps(result))
 
+    def test_variable_frame_rate_uses_real_timestamps(self):
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Settings()
+            settings.upload_dir = Path(temp)
+            settings.data_dir = Path(temp) / "data"
+            source = Path(temp) / "swing.mp4"
+            source.write_bytes(b"video")
+            body = Path(temp) / "body.json"
+            body.write_text('{}')
+            with patch.object(review, "source_frames", return_value=(30, [0, 10, 20, 100, 133])), \
+                 patch.object(review, "analyze_body_video", return_value={"bodyPath": str(body)}), \
+                 patch.object(review, "predict") as predict:
+                predict.return_value = {"events": {"impactMs": 67}}
+                result = review.review_impact(settings, "job", str(source))
+                self.assertEqual(result["candidate"], {"frameIndex": 3, "timeMs": 100})
+                self.assertEqual(result["timingRevision"], 2)
+                for invalid in (-1, 134, float("nan")):
+                    predict.return_value = {"events": {"impactMs": invalid}}
+                    with self.assertRaises(ValueError):
+                        review.review_impact(settings, "job", str(source))
+
     def test_dense_body_reuse_without_original_mutation(self):
         import os
         with tempfile.TemporaryDirectory() as temp:

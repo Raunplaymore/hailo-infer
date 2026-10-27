@@ -254,13 +254,20 @@ def _frame_detections(frame: dict) -> List[dict]:
 
 
 def _normalize_times(frames: List[dict], fps: int, duration_ms: Optional[float] = None) -> List[Optional[float]]:
-    """Return video-timeline milliseconds, preferring valid source frame numbers.
+    """Return video milliseconds, preferring observed buffer PTS over frame/FPS.
 
     Hailo pipeline timestamps measure inference progress on some capture paths;
     they are not necessarily video PTS.  Frame number/FPS is the shared clock
     used by the pose pipeline, so it wins whenever it plausibly spans the
     source video.
     """
+    source_times = [frame.get("sourceTimeMs") for frame in frames]
+    if (
+        source_times
+        and all(isinstance(t, (int, float)) and math.isfinite(t) and t >= 0 for t in source_times)
+        and all(b > a for a, b in zip(source_times, source_times[1:]))
+    ):
+        return source_times
     times: List[Optional[float]] = []
     explicit_ms = False
     frame_times: List[Optional[float]] = []
@@ -2651,6 +2658,8 @@ def analyze_meta(
         source_name = str(point.get("source") or "unknown")
         grip_sources[source_name] = grip_sources.get(source_name, 0) + 1
     overlay = _build_overlay_payload(body_artifact, club_head_track, handle_track)
+    if all(isinstance(time, (int, float)) and frame.get("sourceTimeMs") == time for frame, time in zip(frames, times_ms)):
+        overlay["clubTimeSource"] = "video_pts"
 
     decoder_confidence = _safe_float(body_selector.get("confidence"), 0.0) if use_body_selector else None
     pose_coverage_metric = body_metrics.get("poseCoverage") if isinstance(body_metrics, dict) else None

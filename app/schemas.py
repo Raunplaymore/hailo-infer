@@ -257,6 +257,7 @@ class ClubSidecarRequest(BaseModel):
     metaPath: str
     bodyPath: Optional[str] = None
     takeawayProfile: Optional[str] = None
+    impactMs: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class ClubSidecarResponse(BaseModel):
