@@ -39,6 +39,7 @@ jobs:
         run: |
           python scripts/check_practice_review.py
           python scripts/check_movement_guide.py
+          python scripts/check_coaching_review.py
 
       - name: Check coach commentary rules
         run: |

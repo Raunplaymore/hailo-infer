@@ -1,5 +1,6 @@
 """Observed 2D landmarks for visual review, never a swing-fault diagnosis."""
 import math
+from bisect import bisect_left, bisect_right
 from statistics import median
 
 
@@ -36,8 +37,12 @@ def build_movement_guide(body, address_ms, impact_ms):
                 return None
         return [sum(p[i] for p in values) / len(values) for i in (0, 1)]
 
+    times = [f["timeMs"] for f in frames]
+    observed = {kind: [point(f, kind) for f in frames] for kind in ("head", "pelvis")}
+
     def window(time_ms, kind):
-        samples = [(f["timeMs"], point(f, kind)) for f in frames if abs(f["timeMs"] - time_ms) <= 65]
+        lo, hi = bisect_left(times, time_ms - 65), bisect_right(times, time_ms + 65)
+        samples = [(times[i], observed[kind][i]) for i in range(lo, hi)]
         samples = [(t, p) for t, p in samples if p is not None]
         if len(samples) < 3 or min(abs(t - time_ms) for t, _ in samples) > 40 or any(b[0] - a[0] > 70 for a, b in zip(samples, samples[1:])):
             return None

@@ -26,6 +26,7 @@ from app.services.job_store import JobStore
 from app.services.meta_loader import MetaLoadError, load_meta
 from app.services.result_completion import is_complete_coach_result
 from app.services.practice_review import review_saved_body, preview_saved_body
+from app.services.coaching_review import CoachingBusy, review_coaching
 
 APP_VERSION = "0.1.0"
 
@@ -304,3 +305,13 @@ def practice_preview(payload: PracticeFramesRequest) -> dict:
         return preview_saved_body(settings, payload)
     except (ValueError, OSError, TypeError, KeyError) as exc:
         raise HTTPException(status_code=422, detail="저장된 영상의 자세 비교를 준비하지 못했습니다.") from exc
+
+
+@app.post("/v1/coaching-review")
+def coaching_review(payload: PracticeFramesRequest) -> dict:
+    try:
+        return review_coaching(settings, payload)
+    except CoachingBusy as exc:
+        raise HTTPException(status_code=409, detail="다른 영상의 근거를 준비 중입니다. 잠시 후 다시 시도해 주세요.") from exc
+    except (ValueError, OSError, TypeError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail="영상과 분석의 연결을 확인하지 못했습니다. 이 영상을 다시 분석해 주세요.") from exc

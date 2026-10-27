@@ -1,0 +1,208 @@
+"""Regression checks for silhouette evidence, source identity and bounded work."""
+import copy
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.services import coaching_review as review
+
+
+def samples(shift=8):
+    base = [{"timeMs": t, "edgePx": 80, "y": .6, "uncertaintyPx": 1,
+             "baseline": True, "cameraStable": True} for t in (100, 134, 168)]
+    return base + [{"timeMs": t, "edgePx": 80 + (shift if t >= 700 else 0), "y": .6,
+                    "uncertaintyPx": 1, "baseline": False, "cameraStable": True} for t in range(500, 1101, 60)]
+
+
+def summarize(rows):
+    return review.summarize_observation(rows, "job", 1000, 270, 480, 1)
+
+
+positive = summarize(samples())
+assert positive["evidence"]["observation"] == "toward_ball"
+assert positive["diagnosisStatus"] == "unvalidated" and "practice" not in positive
+assert positive["evidence"]["focusMs"] <= 960
+assert summarize(samples(1))["evidence"]["observation"] == "no_clear_shift"
+late = samples(0)
+for row in late:
+    if row["timeMs"] >= 980:
+        row["edgePx"] += 12
+assert summarize(late)["evidence"]["observation"] == "no_clear_shift", "post-impact change is not early movement"
+single = samples(0)
+single[6]["edgePx"] += 12
+assert summarize(single)["evidence"]["observation"] == "no_clear_shift", "single-frame spike is not sustained evidence"
+mirrored = samples()
+for row in mirrored:
+    row["edgePx"] = 270-row["edgePx"]
+mirror_result = review.summarize_observation(mirrored, "job", 1000, 270, 480, -1)
+assert mirror_result["evidence"]["observation"] == "toward_ball"
+assert mirror_result["evidence"]["shiftPx"] == positive["evidence"]["shiftPx"]
+translated = samples(0)
+for row in translated:
+    dx = row["timeMs"] / 100
+    row.update(transform=[[1,0,dx],[0,1,-5]])
+translation_result = summarize(translated)
+assert translation_result["evidence"]["observation"] == "no_clear_shift", "camera translation is not pelvic movement"
+assert translation_result["evidence"]["cameraMotion"] == "similarity_corrected"
+assert translation_result["evidence"]["shiftPx"] == 0
+assert translation_result["evidence"]["points"][-1]["referenceX"] > translation_result["evidence"]["baselineX"]
+for row in translated:
+    if row["timeMs"] >= 700:
+        row["edgePx"] += 8
+assert summarize(translated)["evidence"]["observation"] == "toward_ball", "relative silhouette motion survives translation correction"
+for key, value in [("cameraStable", False), ("edgePx", float("nan")), ("y", 1), ("uncertaintyPx", 6)]:
+    bad = samples(); bad[5][key] = value
+    assert summarize(bad)["status"] == "unavailable"
+assert summarize(samples()[:6] + samples()[7:])["status"] == "ready", "one missing sample may retain phase coverage"
+assert summarize(samples()[1:])["status"] == "unavailable", "all three baseline observations are required"
+assert summarize([s for s in samples() if s["timeMs"] < 800])["status"] == "unavailable", "missing approach to impact cannot pass"
+bad = samples(); bad[0]["edgePx"] += 10
+assert summarize(bad)["reason"] == "ADDRESS_UNSTABLE"
+assert summarize([s for s in samples() if not 650 < s["timeMs"] < 850])["status"] == "unavailable"
+assert summarize(samples() + [samples()[0]])["status"] == "unavailable"
+
+points = {f"{side}_{joint}": [x, .4 if joint == "shoulder" else .6, .99] for joint, x in (("hip", .4), ("shoulder", .48), ("wrist", .55)) for side in ("left", "right")}
+body = {"frames": [{"timeMs": t, "keypointSource": "observed", "keypoints": copy.deepcopy(points)} for t in (70,100,130)]}
+assert review._direction(body, 100) == 1
+for frame in body["frames"]:
+    for point in frame["keypoints"].values():
+        point[0] = 1-point[0]
+assert review._direction(body, 100) == -1
+for frame in body["frames"]:
+    frame["keypoints"]["left_wrist"][2] = .3
+assert review._direction(body, 100) == -1, "a visible near wrist can calibrate direction while far wrist is occluded"
+for frame in body["frames"]:
+    frame["keypoints"]["right_wrist"][2] = .3
+assert review._direction(body, 100) is None
+for frames in (None, "bad", [None, {"keypointSource": "observed", "timeMs": 100, "keypoints": "bad"}]):
+    assert review._direction({"frames": frames}, 100) is None
+
+with tempfile.TemporaryDirectory() as temp:
+    root = Path(temp); upload = root/"uploads"; data = root/"data"
+    upload.mkdir(); data.mkdir()
+    source = upload/"video.mp4"; source.write_bytes(b"test-video")
+    body_path = data/"body.json"
+    body_path.write_text(json.dumps({"jobId": "job", "source": {"inputPath": str(source)}, "meta": {"durationMs": 1500}}))
+    settings = SimpleNamespace(data_dir=data, upload_dir=upload)
+    payload = SimpleNamespace(jobId="job", inputPath=str(source), bodyPath=str(body_path), addressMs=100,
+                              comparisonMs=900, impactMs=1000, viewpoint="down_the_line")
+    with patch.object(review, "_observe", return_value=positive.copy()) as observe:
+        first = review.review_coaching(settings, payload)
+        assert review.review_coaching(settings, payload) == first
+        assert observe.call_count == 1, "a repeat read must not run MediaPipe again"
+        with patch.object(review, "CACHE_REVISION", review.CACHE_REVISION + 1):
+            review.review_coaching(settings, payload)
+            assert observe.call_count == 2, "algorithm change invalidates old rejection cache"
+        observe.reset_mock()
+        payload.impactMs = 1010
+        review.review_coaching(settings, payload)
+        assert observe.call_count == 1, "changed phase invalidates cache"
+        body_path.write_text(body_path.read_text()+" ")
+        review.review_coaching(settings, payload)
+        assert observe.call_count == 2, "changed pose artifact invalidates cache"
+        payload.impactMs = 1020
+        review.REVIEW_LOCK.acquire()
+        try:
+            try:
+                review.review_coaching(settings, payload)
+                raise AssertionError("busy work must not start")
+            except review.CoachingBusy:
+                pass
+        finally:
+            review.REVIEW_LOCK.release()
+        assert observe.call_count == 2
+    with patch.object(review, "_observe", return_value=review.unavailable("job", "ANALYSIS_RUNTIME_UNAVAILABLE")) as observe:
+        assert review.review_coaching(settings, payload)["reason"] == "ANALYSIS_RUNTIME_UNAVAILABLE"
+        review.review_coaching(settings, payload)
+        assert observe.call_count == 2, "transient runtime failures must remain retryable"
+    original_load = review.load_practice_body
+    def change_during_load(*args):
+        value = original_load(*args)
+        body_path.write_text(body_path.read_text()+" ")
+        return value
+    with patch.object(review, "load_practice_body", side_effect=change_during_load), patch.object(review, "_observe") as observe:
+        try:
+            review.review_coaching(settings, payload)
+            raise AssertionError("pose changed while reading")
+        except ValueError:
+            pass
+        assert observe.call_count == 0
+    def change_source(_body, _payload):
+        source.write_bytes(b"changed-source")
+        return positive.copy()
+    with patch.object(review, "_observe", side_effect=change_source):
+        try:
+            review.review_coaching(settings, payload)
+            raise AssertionError("must not cache a result for a changed input")
+        except ValueError:
+            pass
+    assert not list(data.rglob("*.tmp"))
+    payload.jobId = "../outside"
+    try:
+        review.review_coaching(settings, payload)
+        raise AssertionError("path traversal accepted")
+    except ValueError:
+        pass
+
+try:
+    import cv2
+    import numpy as np
+except ImportError:
+    print("OpenCV checks unavailable on this Python; run on Pi candidate environment")
+else:
+    gray = np.random.default_rng(71).integers(0, 256, (480,270), dtype="uint8")
+    mask = np.zeros((480,270), dtype="float32")
+    motion = review._background_motion(gray, gray.copy(), mask, mask)
+    assert motion is not None and np.allclose(motion[0], [[1,0,0],[0,1,0]], atol=.01)
+    moved = cv2.warpAffine(gray, np.float32([[1,0,7],[0,1,0]]), (270,480))
+    motion = review._background_motion(gray, moved, mask, mask)
+    assert motion is not None and abs(motion[0][0,2]-7)<.1 and abs(motion[0][1,2])<.1
+    far = cv2.warpAffine(gray, np.float32([[1,0,20],[0,1,0]]), (270,480))
+    assert review._background_motion(gray, far, mask, mask) is None
+    for angle, scale in [(.6,1),(0,1.01)]:
+        transform = cv2.getRotationMatrix2D((135,240),angle,scale)
+        changed = cv2.warpAffine(gray, transform, (270,480))
+        motion = review._background_motion(gray, changed, mask, mask)
+        assert motion is not None, (angle, scale)
+        assert np.max(np.abs(motion[0]-transform)) < .2
+    for angle, scale in [(2,1),(0,1.04)]:
+        changed = cv2.warpAffine(gray, cv2.getRotationMatrix2D((135,240),angle,scale), (270,480))
+        assert review._background_motion(gray, changed, mask, mask) is None
+    assert review._background_motion(gray, gray, np.ones_like(mask), mask) is None
+    assert review._background_motion(np.zeros_like(gray), np.zeros_like(gray), mask, mask) is None
+    deformed = gray.copy()
+    deformed[:240] = np.roll(gray[:240], 3, axis=1)
+    deformed[240:] = np.roll(gray[240:], -3, axis=1)
+    assert review._background_motion(gray, deformed, mask, mask) is None, "inconsistent background cannot be corrected as camera motion"
+    mask[100:400,80:150] = 1
+    hips = [SimpleNamespace(x=.42,y=.6,visibility=.99) for _ in range(33)]
+    result = SimpleNamespace(pose_landmarks=SimpleNamespace(landmark=hips), segmentation_mask=mask)
+    assert review._silhouette(result, 1, 270, 480)["edgePx"] == 80
+    assert review._silhouette(result, -1, 270, 480)["edgePx"] == 149
+    transform = cv2.getRotationMatrix2D((135,240), .6, 1.01)
+    transform[:,2] += [2,-3]
+    xy = transform @ np.array([.42*270,.6*480,1])
+    moving_result = SimpleNamespace(pose_landmarks=SimpleNamespace(landmark=[SimpleNamespace(x=xy[0]/270,y=xy[1]/480,visibility=.99) for _ in range(33)]), segmentation_mask=cv2.warpAffine(mask,transform,(270,480)))
+    stabilized = review._stabilize_pose(moving_result,transform,270,480)
+    assert abs(review._silhouette(stabilized,1,270,480)["edgePx"]-80) <= 1, "camera rotation/scale must not become pelvis shift"
+    transformed_samples = samples(0)
+    for row in transformed_samples:
+        row["transform"] = transform.tolist()
+    observed = summarize(transformed_samples)["evidence"]
+    assert observed["shiftPx"] == 0
+    point = observed["points"][-1]
+    assert point["referenceTop"][0] != point["referenceBottom"][0], "reference line rotates with image"
+    assert np.allclose([point["x"]*270,point["y"]*480],transform@np.array([80,.6*480,1]),atol=.001)
+    hips[23].visibility = .2
+    assert review._silhouette(result, 1, 270, 480) is None
+    hips[23].visibility = .99
+    mask[100:400,190:240] = 1
+    assert review._silhouette(result, 1, 270, 480) is None, "second large foreground component must be rejected"
+    print("background translation, texture, foreground exclusion and silhouette component checks passed")
+
+print("coaching evidence timing, noise, mirror, calibration, source identity, caching and concurrency checks passed")
