@@ -548,8 +548,49 @@ def _sample_overlay_points(points: List[dict], limit: int = 360) -> List[dict]:
     return points[::stride]
 
 
+def _mark_sampled_club_gaps(sampled: List[dict], club_by_frame: Dict[int, dict], frames: List[dict]) -> None:
+    """Preserve known detector gaps even when the overlay is downsampled."""
+    times = [frame.get("sourceTimeMs") for frame in frames]
+    if (not times or any(type(t) not in (int, float) or not math.isfinite(t) or t < 0 for t in times)
+            or any(b <= a for a, b in zip(times, times[1:]))):
+        return
+    try:
+        ids = [_safe_int(frame.get("frame", index), index) for index, frame in enumerate(frames)]
+    except OverflowError:
+        return
+    positions = {frame_id: index for index, frame_id in enumerate(ids)}
+    if len(positions) != len(ids) or any(frame_id < 0 for frame_id in ids):
+        return
+    sampled_by_frame = {row["frame"]: row for row in sampled}
+    if (len(sampled_by_frame) != len(sampled) or any(row["frame"] not in positions
+            or row["timeMs"] != round(times[positions[row["frame"]]]) for row in sampled)):
+        return
+    order = [positions[row["frame"]] for row in sampled]
+    if any(b <= a for a, b in zip(order, order[1:])):
+        return
+    seen = {"head": False, "handle": False}
+    missing = {"head": False, "handle": False}
+    last_saved = {"head": None, "handle": None}
+    for index, frame_id in enumerate(ids):
+        observed = club_by_frame.get(frame_id, {})
+        saved = sampled_by_frame.get(frame_id)
+        for key in ("head", "handle"):
+            point = observed.get(key)
+            valid = isinstance(point, dict) and _safe_float(point.get("confidence")) >= 0.3
+            if not valid and seen[key]:
+                missing[key] = True
+                last_saved[key].setdefault(f"{key}ValidUntilMs", round(times[index]))
+            if saved is not None:
+                if valid and seen[key] and missing[key]:
+                    saved[f"{key}BreakBefore"] = True
+                seen[key] = valid
+                missing[key] = False
+                last_saved[key] = saved if valid else None
+
+
 def _build_overlay_payload(
-    body_artifact: Optional[Dict[str, Any]], club_head_track: List[dict], handle_track: List[dict]
+    body_artifact: Optional[Dict[str, Any]], club_head_track: List[dict], handle_track: List[dict],
+    metadata_frames: Optional[List[dict]] = None,
 ) -> Dict[str, Any]:
     """Expose compact, normalized timeline artifacts for the analysis player."""
     raw_body_frames = body_artifact.get("frames") if isinstance(body_artifact, dict) else None
@@ -581,10 +622,13 @@ def _build_overlay_payload(
                 "confidence": round(_safe_float(point.get("conf")), 3),
             }
     club_frames = sorted(club_by_frame.values(), key=lambda point: (point["timeMs"], point["frame"]))
+    sampled_club_frames = _sample_overlay_points(club_frames)
+    if metadata_frames:
+        _mark_sampled_club_gaps(sampled_club_frames, club_by_frame, metadata_frames)
     return {
         "coordinateSpace": "normalized",
         "poseFrames": _sample_overlay_points(pose_frames),
-        "clubFrames": _sample_overlay_points(club_frames),
+        "clubFrames": sampled_club_frames,
     }
 
 
@@ -2641,7 +2685,7 @@ def analyze_meta(
     for point in grip_track:
         source_name = str(point.get("source") or "unknown")
         grip_sources[source_name] = grip_sources.get(source_name, 0) + 1
-    overlay = _build_overlay_payload(body_artifact, club_head_track, handle_track)
+    overlay = _build_overlay_payload(body_artifact, club_head_track, handle_track, frames)
     if all(isinstance(time, (int, float)) and frame.get("sourceTimeMs") == time for frame, time in zip(frames, times_ms)):
         overlay["clubTimeSource"] = "video_pts"
 

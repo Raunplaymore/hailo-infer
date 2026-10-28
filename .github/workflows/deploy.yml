@@ -36,6 +36,7 @@ jobs:
           python scripts/test_impact_review.py
           python scripts/check_club_timeline.py
           python scripts/check_club_observation.py
+          python scripts/check_club_gap_markers.py
 
       - name: Check saved-video posture review
         run: |
