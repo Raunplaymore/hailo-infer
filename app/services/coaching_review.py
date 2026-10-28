@@ -11,7 +11,7 @@ from app.services.movement_guide import build_movement_guide
 from app.services.practice_review import load_practice_body, number
 
 VERSION = "dtl-coaching-review-v1"
-CACHE_REVISION = 3
+CACHE_REVISION = 4
 REVIEW_LOCK = threading.Lock()
 
 
@@ -81,10 +81,10 @@ def summarize_observation(samples, job_id, impact_ms, width, height, direction):
     focus = before[max(sustained, key=lambda i: shifts[i])] if sustained else before[max(range(len(before)), key=lambda i: shifts[i])]
     observation = "toward_ball" if sustained else "no_clear_shift"
     return {**result, "status": "ready", "reason": None,
-            "summary": "공에 닿기 전, 골반 뒤쪽 윤곽이 시작 기준선보다 공 쪽에 보입니다." if sustained else
-                       "검사한 구간에서 골반 뒤쪽 윤곽의 뚜렷한 공 방향 이동은 찾지 못했습니다.",
+            "summary": "임팩트 후보 전, 골반 뒤쪽 윤곽이 시작 기준선보다 추정한 공 방향에 보입니다." if sustained else
+                       "검사한 구간에서 골반 뒤쪽 윤곽의 뚜렷한 추정 공 방향 이동은 찾지 못했습니다.",
             "evidence": {"addressMs": min(base, key=lambda s: abs(s["edgePx"] - baseline))["timeMs"],
-                         "startMs": before[0]["timeMs"], "endMs": samples[-1]["timeMs"],
+                         "startMs": before[0]["timeMs"], "endMs": before[-1]["timeMs"],
                          "focusMs": focus["timeMs"], "impactMs": impact_ms,
                          "width": width, "height": height, "ballDirection": "right" if direction == 1 else "left",
                          "baselineX": round(baseline / width, 6), "baselineY": round(baseline_y, 6),

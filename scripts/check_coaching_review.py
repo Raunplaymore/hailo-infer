@@ -26,7 +26,10 @@ def summarize(rows):
 positive = summarize(samples())
 assert positive["evidence"]["observation"] == "toward_ball"
 assert positive["diagnosisStatus"] == "unvalidated" and "practice" not in positive
+assert "임팩트 후보" in positive["summary"] and "추정한 공 방향" in positive["summary"]
 assert positive["evidence"]["focusMs"] <= 960
+assert positive["evidence"]["endMs"] == 920, "replay ends at the last measured pre-impact sample"
+assert positive["evidence"]["endMs"] < positive["evidence"]["impactMs"]
 assert summarize(samples(1))["evidence"]["observation"] == "no_clear_shift"
 late = samples(0)
 for row in late:
