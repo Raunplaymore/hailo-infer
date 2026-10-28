@@ -1829,13 +1829,11 @@ def _shaft_plane(
 
     if angle >= 62:
         label = "steep"
-        comment = "다운스윙 샤프트가 2D 기준으로 세워진 편입니다. 전환 이후 손이 앞서가며 클럽이 늦게 내려오는지 확인하세요."
     elif angle <= 38:
         label = "flat"
-        comment = "다운스윙 샤프트가 2D 기준으로 눕는 편입니다. 클럽이 몸 뒤에 남아 임팩트 타이밍이 늦어질 수 있습니다."
     else:
         label = "neutral"
-        comment = "다운스윙 샤프트 각도는 단일 카메라 2D 기준에서 중립 범위입니다."
+    comment = "단일 카메라의 2D 추정값이며 샤프트의 3D 움직임이나 교정 필요성을 뜻하지 않습니다."
 
     if source == "club_box_proxy":
         comment = f"{comment} club_handle 검출이 없어 club bbox 장축으로 근사한 값입니다."
@@ -1933,24 +1931,13 @@ def _backswing_metric(
     score = _clamp(travel_ratio / target_ratio)
     if travel_ratio < short_threshold:
         label = "short"
-        comment = (
-            "백스윙 탑까지 손목 이동량이 작습니다. 어깨 회전과 손 위치가 충분히 올라가는지 확인하세요."
-            if source == "pose_wrist"
-            else "백스윙 탑까지 클럽 이동량이 작습니다. 어깨 회전과 손 위치가 충분히 올라가는지 확인하세요."
-        )
     elif top_height_ratio is not None and top_height_ratio > 0.62:
         label = "low_top"
-        comment = "백스윙 탑 위치가 낮게 잡힙니다. 전신 프레임에서 왼팔과 어깨 회전 폭을 함께 확인하세요."
     elif top_height_ratio is not None and top_height_ratio < -0.08:
         label = "high_top"
-        comment = "백스윙 탑이 매우 높게 잡힙니다. 오버스윙이거나 카메라 각도 영향일 수 있습니다."
     else:
         label = "adequate"
-        comment = (
-            "백스윙 크기는 pose 손목 추적 기준에서 적정 범위입니다."
-            if source == "pose_wrist"
-            else "백스윙 크기는 service7 클럽 추적 기준에서 적정 범위입니다."
-        )
+    comment = "이전 2D 이동량 기준의 참고값이며 백스윙의 적정 여부를 판정하지 않습니다."
 
     return {
         "label": label,
@@ -2124,14 +2111,11 @@ def _finalize_metric_evidence(
     shaft_confidence = _safe_float(shaft.get("confidence"), 0.0)
     shaft_samples = _safe_int(shaft.get("sampleCount"), 0)
     shaft_has_value = shaft.get("angleDeg") is not None
-    shaft_confirmed = (
-        event_usable
-        and shaft_source == "head_handle"
-        and shaft_confidence >= 0.35
-        and shaft_samples >= 8
-    )
-    shaft_status = "confirmed" if shaft_confirmed else "reference" if event_usable and shaft_has_value else "withheld"
+    # shortcut: projected shaft estimates lack independent golf validation; revisit after labeled evaluation.
+    shaft_status = "reference" if event_usable and shaft_has_value else "withheld"
     shaft_reasons: list[str] = []
+    if shaft_status == "reference":
+        shaft_reasons.append("SHAFT_2D_UNVALIDATED")
     if not event_usable:
         shaft_reasons.append("EVENT_EVIDENCE_INSUFFICIENT")
     if shaft_source != "head_handle":
@@ -2687,11 +2671,7 @@ def analyze_meta(
     tempo = {**tempo, "status": metric_evidence["tempo"]["status"], "comment": "Takeaway부터 Top까지의 백스윙과 Top부터 Impact까지의 관측 시간 비율이며 전환 순서를 직접 증명하지 않습니다."}
     tempo_for_coach: Dict[str, object] = {}
     shaft_for_coach = shaft if metric_evidence["shaft"]["status"] == "confirmed" else {"label": "withheld"}
-    backswing_for_coach = (
-        backswing
-        if metric_evidence["backswing"]["status"] == "confirmed" or backswing.get("label") == "adequate"
-        else {"label": "withheld"}
-    )
+    backswing_for_coach = backswing if metric_evidence["backswing"]["status"] == "confirmed" else {"label": "withheld"}
     impact_for_coach = {"label": "withheld"}
     ball_for_coach = {"launchDirection": "unknown"}
     path_for_coach = {"label": "withheld", "confidence": 0.0}
@@ -2761,7 +2741,7 @@ def analyze_meta(
             "priority": "분석 범위",
             "evidence": f"이번 분석에서는 {'·'.join(unavailable_labels)} 항목을 확정하지 못했습니다.",
             "interpretation": "확인된 유지 항목이 스윙 전체가 좋다는 뜻은 아닙니다.",
-            "action": "표시된 유지점과 개선 후보만 적용하고, 구질 원인은 추가 근거가 확보될 때까지 단정하지 마세요.",
+            "action": "관찰 장면을 먼저 확인하고, 교정이 필요하다면 코치와 상의하세요.",
             "drill": None,
             "checkpoint": "촬영 시점과 좌우 타석 정보가 정확한지 확인합니다.",
             "caution": "슬라이스 여부와 원인은 현재 결과에 포함되지 않습니다.",

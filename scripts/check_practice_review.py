@@ -7,7 +7,9 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
+from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.services.practice_review import measure_posture, review_saved_body, preview_saved_body
 
@@ -71,14 +73,20 @@ def main():
         try:measure_posture(base,'job',a,b)
         except ValueError:pass
         else:raise AssertionError('invalid times accepted')
-    with tempfile.TemporaryDirectory() as directory:
+    with patch('app.services.practice_review.source_frames', return_value=(30, [0,100,130,160,190,500,530,560,590])), tempfile.TemporaryDirectory() as directory:
         root=Path(directory);uploads=root/'uploads';uploads.mkdir();data=root/'data';data.mkdir()
         source=uploads/'clip.mp4';source.write_bytes(b'video identity fixture')
+        time.sleep(.01)
         artifact=data/'pose.json'
         payload=SimpleNamespace(jobId='job',inputPath=str(source),bodyPath=str(artifact),addressMs=145,comparisonMs=545)
-        base['source']={'inputPath':str(source)};artifact.write_text(json.dumps(base))
+        base['source']={'inputPath':str(source)}
+        base['frames'] = [{'frameIndex': 0, 'timeMs': 0}] + [
+            {**frame, 'frameIndex': i, 'timeMs': i*33} for i,frame in enumerate(base['frames'],1)]
+        base['meta'].update(sampleStride=1, sampledFrames=len(base['frames']))
+        artifact.write_text(json.dumps(base))
         settings=SimpleNamespace(upload_dir=uploads,data_dir=data)
         assert review_saved_body(settings,payload)['status']=='review_candidate'
+        assert json.loads(artifact.read_text())['frames'][1]['timeMs']==33, 'stored pose must not be rewritten'
         preview = preview_saved_body(settings,payload)
         assert {k:v for k,v in preview.items() if k!='movementGuide'} == {'ok': True, 'jobId':'job', 'status':'ready', 'addressMs':145, 'comparisonMs':545}
         assert not any(k in preview for k in ('evidence','practice','changeDeg'))
@@ -87,13 +95,30 @@ def main():
         assert preview['status']=='ready' and preview['addressMs']>=100
         payload.addressMs=145
         artifact.write_text(json.dumps({**base,'frames':[]}))
-        assert preview_saved_body(settings,payload)['status']=='unavailable'
+        try:preview_saved_body(settings,payload)
+        except ValueError:pass
+        else:raise AssertionError('unmatched source frames accepted')
         artifact.write_text(json.dumps(base))
         for change in ({'jobId':'other'},{'source':{'inputPath':str(uploads/'different.mp4')}}):
             artifact.write_text(json.dumps({**base,**change}))
             try:review_saved_body(settings,payload)
             except ValueError:pass
             else:raise AssertionError('mismatched body accepted')
+        fixed=1_600_000_000_000_000_000
+        os.utime(source,ns=(fixed,fixed));artifact.write_text(json.dumps(base))
+        replacement=uploads/'replacement.mp4';replacement.write_bytes(b'x'*source.stat().st_size);os.utime(replacement,ns=(fixed,fixed))
+        replacement.replace(source)
+        try:review_saved_body(settings,payload)
+        except ValueError:pass
+        else:raise AssertionError('replaced source with preserved mtime accepted')
+        time.sleep(.01);artifact.write_text(json.dumps(base))
+        def changing_video(_source):
+            source.write_bytes(b'video changed during timestamp read')
+            return (30, [0,100,130,160,190,500,530,560,590])
+        with patch('app.services.practice_review.source_frames', side_effect=changing_video):
+            try:review_saved_body(settings,payload)
+            except ValueError:pass
+            else:raise AssertionError('changing source accepted')
         artifact.write_text(json.dumps(base));os.utime(source,(source.stat().st_atime,artifact.stat().st_mtime+1))
         try:review_saved_body(settings,payload)
         except ValueError:pass

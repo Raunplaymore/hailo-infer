@@ -3,6 +3,7 @@ import json
 import math
 from pathlib import Path
 from statistics import median
+from app.services.impact_review import align_body_times, source_frames, stat_identity
 from app.services.movement_guide import build_movement_guide
 
 VERSION = "dtl-posture-review-v1"
@@ -113,15 +114,20 @@ def load_practice_body(settings, payload):
     body_path = Path(payload.bodyPath).resolve(strict=True)
     if not any(source.is_relative_to(root.resolve()) for root in (settings.upload_dir, settings.data_dir)) or not body_path.is_relative_to(settings.data_dir.resolve()):
         raise ValueError("저장된 영상과 자세 입력만 사용할 수 있습니다.")
-    if body_path.stat().st_size > 30_000_000:
+    source_stat, body_stat = source.stat(), body_path.stat()
+    if body_stat.st_size > 30_000_000:
         raise ValueError("자세 입력이 너무 큽니다.")
     body = json.loads(body_path.read_text())
     if (not isinstance(body, dict) or body.get("jobId") != payload.jobId
             or not isinstance(body.get("source"), dict)
             or Path((body.get("source") or {}).get("inputPath", "")).resolve() != source
-            or body_path.stat().st_mtime_ns < source.stat().st_mtime_ns):
+            or body_stat.st_mtime_ns < source_stat.st_mtime_ns or body_stat.st_ctime_ns <= source_stat.st_ctime_ns):
         raise ValueError("영상과 자세 분석이 일치하지 않습니다. 이 영상을 다시 분석해 주세요.")
-    return body
+    _, times = source_frames(source)
+    current_source, current_body = source.stat(), body_path.stat()
+    if stat_identity(source_stat) != stat_identity(current_source) or stat_identity(body_stat) != stat_identity(current_body):
+        raise ValueError("영상이나 자세 분석이 변경됐습니다. 다시 시도해 주세요.")
+    return align_body_times(body, times)
 
 
 def review_saved_body(settings, payload):

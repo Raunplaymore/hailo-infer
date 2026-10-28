@@ -8,10 +8,11 @@ from statistics import median
 from types import SimpleNamespace
 
 from app.services.movement_guide import build_movement_guide
+from app.services.impact_review import stat_identity
 from app.services.practice_review import load_practice_body, number
 
 VERSION = "dtl-coaching-review-v1"
-CACHE_REVISION = 4
+CACHE_REVISION = 5
 REVIEW_LOCK = threading.Lock()
 
 
@@ -293,7 +294,7 @@ def _identity(payload):
         stat = path.stat()
         if not path.is_file():
             raise ValueError("Expected saved files")
-        files.append([str(path), stat.st_size, stat.st_mtime_ns])
+        files.append([str(path), *stat_identity(stat)])
     return {"version": VERSION, "algorithmRevision": CACHE_REVISION, "files": files, "addressMs": payload.addressMs, "impactMs": payload.impactMs,
             "viewpoint": payload.viewpoint}
 

@@ -85,12 +85,16 @@ assert review._direction(body, 100) is None
 for frames in (None, "bad", [None, {"keypointSource": "observed", "timeMs": 100, "keypoints": "bad"}]):
     assert review._direction({"frames": frames}, 100) is None
 
-with tempfile.TemporaryDirectory() as temp:
+with patch('app.services.practice_review.source_frames', return_value=(30, [0,33,67,100])), tempfile.TemporaryDirectory() as temp:
     root = Path(temp); upload = root/"uploads"; data = root/"data"
     upload.mkdir(); data.mkdir()
     source = upload/"video.mp4"; source.write_bytes(b"test-video")
+    import time
+    time.sleep(.01)
     body_path = data/"body.json"
-    body_path.write_text(json.dumps({"jobId": "job", "source": {"inputPath": str(source)}, "meta": {"durationMs": 1500}}))
+    body_path.write_text(json.dumps({"jobId": "job", "source": {"inputPath": str(source)},
+        "meta": {"durationMs": 1500, "sampleStride": 1, "sampledFrames": 4},
+        "frames": [{"frameIndex": i, "timeMs": i * 33} for i in range(4)]}))
     settings = SimpleNamespace(data_dir=data, upload_dir=upload)
     payload = SimpleNamespace(jobId="job", inputPath=str(source), bodyPath=str(body_path), addressMs=100,
                               comparisonMs=900, impactMs=1000, viewpoint="down_the_line")
