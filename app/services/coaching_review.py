@@ -325,20 +325,21 @@ def review_coaching(settings, payload):
         return unavailable(payload.jobId, "PHASE_OR_VIEWPOINT_UNAVAILABLE")
     identity = _identity(payload)
     body = load_practice_body(settings, payload)
+    guide = build_movement_guide(body, payload.addressMs, impact)
     if _identity(payload) != identity:
         raise ValueError("Input changed while reading pose")
     cache = settings.data_dir / "coaching-review" / f"{payload.jobId}.json"
     cached = _read_cache(cache, identity, payload.jobId)
     if cached is not None:
-        return cached
+        return {**cached, "movementGuide": guide}
     if not REVIEW_LOCK.acquire(blocking=False):
         raise CoachingBusy("A silhouette observation is running")
     try:
         cached = _read_cache(cache, identity, payload.jobId)
         if cached is not None:
-            return cached
+            return {**cached, "movementGuide": guide}
         result = _observe(body, payload)
-        result["movementGuide"] = build_movement_guide(body, payload.addressMs, impact)
+        result["movementGuide"] = guide
         if _identity(payload) != identity:
             raise ValueError("Input changed during observation")
         if result.get("reason") == "ANALYSIS_RUNTIME_UNAVAILABLE":

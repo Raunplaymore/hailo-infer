@@ -12,7 +12,8 @@ body={'meta':{'width':1080,'height':1920,'durationMs':1500},'frames':frames}
 def build(b): return build_movement_guide(b,100,1000)
 g=build(body);assert g['status']=='ready' and set(g['tracks'])=={'head','pelvis'}
 assert g['tracks']['pelvis']['phase']=='before' and abs(g['tracks']['pelvis']['focusTimeMs']-900)<=30
-assert g['tracks']['head']['phase']=='after'
+assert g['tracks']['head']['focusTimeMs'] <= 1000, 'head review should start at or before the impact candidate'
+assert any(p['timeMs'] > 1000 for p in g['tracks']['head']['points']), 'post-impact review must remain available'
 assert 'diagnosis' not in g and 'practice' not in g
 bad=copy.deepcopy(body)
 for f in bad['frames']: f['keypoints']['nose'][2]=.2

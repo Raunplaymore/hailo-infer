@@ -76,7 +76,8 @@ def build_movement_guide(body, address_ms, impact_ms):
         def distance(p):
             dx = (p["x"] - baseline["x"]) * width / height
             return math.hypot(dx, p["y"] - baseline["y"]) if kind == "head" else abs(dx)
-        peak = max(near, key=distance)
+        # shortcut: an impact candidate can be wrong; validate events before claiming phase accuracy.
+        peak = max((p for p in near if kind != "head" or p["timeMs"] <= impact_ms), key=distance)
         tracks[kind] = {"baseline": baseline, "points": points, "focusTimeMs": peak["timeMs"],
                         "phase": "before" if peak["timeMs"] < impact_ms - 40 else "after" if peak["timeMs"] > impact_ms + 40 else "near"}
     if not tracks:

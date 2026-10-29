@@ -120,6 +120,12 @@ with patch('app.services.practice_review.source_frames', return_value=(30, [0,33
         first = review.review_coaching(settings, payload)
         assert review.review_coaching(settings, payload) == first
         assert observe.call_count == 1, "a repeat read must not run MediaPipe again"
+        cached_path = data / "coaching-review" / "job.json"
+        cached_before = cached_path.read_bytes()
+        updated_guide = {"version": "movement-guide-v1", "status": "unavailable", "testMarker": "fresh"}
+        with patch.object(review, "build_movement_guide", return_value=updated_guide):
+            assert review.review_coaching(settings, payload)["movementGuide"] == updated_guide
+        assert observe.call_count == 1 and cached_path.read_bytes() == cached_before, "refresh guide without rerunning or rewriting silhouette"
         with patch.object(review, "CACHE_REVISION", review.CACHE_REVISION + 1):
             review.review_coaching(settings, payload)
             assert observe.call_count == 2, "algorithm change invalidates old rejection cache"
