@@ -50,14 +50,27 @@ for row in translated:
     dx = row["timeMs"] / 100
     row.update(transform=[[1,0,dx],[0,1,-5]])
 translation_result = summarize(translated)
-assert translation_result["evidence"]["observation"] == "no_clear_shift", "camera translation is not pelvic movement"
-assert translation_result["evidence"]["cameraMotion"] == "similarity_corrected"
-assert translation_result["evidence"]["shiftPx"] == 0
-assert translation_result["evidence"]["points"][-1]["referenceX"] > translation_result["evidence"]["baselineX"]
+assert translation_result["reason"] == "CAMERA_BACKGROUND_AMBIGUOUS", "a decisive background correction needs independent camera evidence"
 for row in translated:
     if row["timeMs"] >= 700:
         row["edgePx"] += 8
-assert summarize(translated)["evidence"]["observation"] == "toward_ball", "relative silhouette motion survives translation correction"
+assert summarize(translated)["reason"] == "CAMERA_BACKGROUND_AMBIGUOUS"
+constant_transform = samples()
+for row in constant_transform:
+    row["transform"] = [[1,0,7],[0,1,-5]]
+assert summarize(constant_transform)["evidence"]["observation"] == "toward_ball", "a constant offset must not hide relative movement"
+for dx in (-5, 5):
+    moving_background = samples(0)
+    for row in moving_background:
+        if not row["baseline"]:
+            row.update(edgePx=80-dx, transform=[[1,0,dx],[0,1,0]])
+    assert summarize(moving_background)["reason"] == "CAMERA_BACKGROUND_AMBIGUOUS", "a stationary person cannot inherit background motion"
+for dx, expected in ((2, "ready"), (2.1, "unavailable")):
+    borderline = samples(0)
+    for row in borderline:
+        if not row["baseline"]:
+            row["transform"] = [[1,0,dx],[0,1,0]]
+    assert summarize(borderline)["status"] == expected, "correction dependence uses the existing noise limit"
 for key, value in [("cameraStable", False), ("edgePx", float("nan")), ("y", 1), ("uncertaintyPx", 6)]:
     bad = samples(); bad[5][key] = value
     assert summarize(bad)["status"] == "unavailable"

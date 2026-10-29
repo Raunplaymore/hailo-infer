@@ -12,7 +12,7 @@ from app.services.impact_review import stat_identity
 from app.services.practice_review import load_practice_body, number
 
 VERSION = "dtl-coaching-review-v1"
-CACHE_REVISION = 6
+CACHE_REVISION = 7
 REVIEW_LOCK = threading.Lock()
 
 
@@ -80,6 +80,13 @@ def summarize_observation(samples, job_id, impact_ms, width, height, direction):
         return unavailable(job_id, "PELVIS_HEIGHT_UNCERTAIN")
     # Pixel uncertainty only; this is not an anatomical or golf-fault threshold.
     noise = max(2.0, spread * 2, max(s["uncertaintyPx"] + s.get("registrationErrorPx", 0) for s in samples) * 2)
+    def image_x(sample):
+        m = sample.get("transform", [[1, 0, 0], [0, 1, 0]])
+        return m[0][0] * sample["edgePx"] + m[0][1] * sample["y"] * height + m[0][2]
+    # A moving background can mimic camera motion, so keep only correction-insensitive observations.
+    image_baseline = median(image_x(s) for s in base)
+    if any(abs((image_x(s) - image_baseline) - (s["edgePx"] - baseline)) > noise for s in before):
+        return unavailable(job_id, "CAMERA_BACKGROUND_AMBIGUOUS")
     shifts = [(s["edgePx"] - baseline) * direction for s in before]
     sustained = [i for i in range(2, len(before)) if min(shifts[i-2:i+1]) > noise
                  and all(before[j]["timeMs"]-before[j-1]["timeMs"] <= 85 for j in (i-1, i))]
