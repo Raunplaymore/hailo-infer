@@ -347,12 +347,13 @@ def _select_best_track(frames: List[dict], labels: Iterable[str]) -> List[dict]:
     return track
 
 
-def _ambiguous_club_head_frames(frames: List[dict]) -> set:
+def _ambiguous_club_frames(frames: List[dict], labels: Iterable[str]) -> set:
+    wanted = {_normalize_label(label) for label in labels}
     ambiguous = set()
     for index, frame in enumerate(frames):
         candidates = []
         for det in _frame_detections(frame):
-            if not isinstance(det, dict) or _detection_label(det) not in CLUBHEAD_LABELS or _detection_conf(det) < 0.3:
+            if not isinstance(det, dict) or _detection_label(det) not in wanted or _detection_conf(det) < 0.3:
                 continue
             box = _bbox_xywh(det)
             if box is not None:
@@ -2395,6 +2396,7 @@ def analyze_meta(
     *,
     allow_body_fallback: bool = True,
     withhold_ambiguous_club_heads: bool = False,
+    withhold_ambiguous_club_handles: bool = False,
 ) -> Dict[str, object]:
     frames = meta.get("frames", [])
     if not isinstance(frames, list) or not frames:
@@ -2708,11 +2710,15 @@ def analyze_meta(
     for point in grip_track:
         source_name = str(point.get("source") or "unknown")
         grip_sources[source_name] = grip_sources.get(source_name, 0) + 1
-    ambiguous = _ambiguous_club_head_frames(frames) if withhold_ambiguous_club_heads else set()
-    overlay_heads = [point for point in club_head_track if point["frame"] not in ambiguous]
+    ambiguous_heads = _ambiguous_club_frames(frames, CLUBHEAD_LABELS) if withhold_ambiguous_club_heads else set()
+    ambiguous_handles = _ambiguous_club_frames(frames, HANDLE_LABELS) if withhold_ambiguous_club_handles else set()
+    overlay_heads = [point for point in club_head_track if point["frame"] not in ambiguous_heads]
+    overlay_handles = [point for point in handle_track if point["frame"] not in ambiguous_handles]
     if withhold_ambiguous_club_heads:
-        tracking["ambiguousClubHeadFrames"] = len(ambiguous)
-    overlay = _build_overlay_payload(body_artifact, overlay_heads, handle_track, frames)
+        tracking["ambiguousClubHeadFrames"] = len(ambiguous_heads)
+    if withhold_ambiguous_club_handles:
+        tracking["ambiguousClubHandleFrames"] = len(ambiguous_handles)
+    overlay = _build_overlay_payload(body_artifact, overlay_heads, overlay_handles, frames)
     if all(isinstance(time, (int, float)) and frame.get("sourceTimeMs") == time for frame, time in zip(frames, times_ms)):
         overlay["clubTimeSource"] = "video_pts"
 
