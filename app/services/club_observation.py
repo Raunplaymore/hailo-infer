@@ -121,6 +121,28 @@ def observe(analysis, impact_ms):
     median_length = statistics.median(p['projectedLengthPx'] for p in pairs) if pairs else 0
     # Short projected segments amplify endpoint errors; this is an engineering gate.
     stable_pairs = [p for p in pairs if p['projectedLengthPx'] >= median_length * .25]
+    # shortcut: absent metadata rows remain unknown until matched to the source frame timeline.
+    raw_index = {row['timeMs']: i for i, row in enumerate(raw)}
+    known_gaps, gap_edges, tail_gap_start = [], set(), None
+    if stable_pairs:
+        first, last = stable_pairs[0], stable_pairs[-1]
+        if raw_index[first['timeMs']] or first.get('headBreakBefore') is True or first.get('handleBreakBefore') is True:
+            known_gaps.append((raw[0]['timeMs'] if raw_index[first['timeMs']] else 0, first['timeMs']))
+        for before, after in zip(stable_pairs, stable_pairs[1:]):
+            stops = [before.get(f'{key}ValidUntilMs') for key in ('head', 'handle')]
+            has_gap = (raw_index[after['timeMs']] != raw_index[before['timeMs']] + 1
+                       or after.get('headBreakBefore') is True or after.get('handleBreakBefore') is True
+                       or any(finite(stop) and stop <= after['timeMs'] for stop in stops))
+            if has_gap:
+                edge = (before['timeMs'], after['timeMs'])
+                gap_edges.add(edge)
+                known_gaps.append(edge)
+        tail_stops = [last.get(f'{key}ValidUntilMs') for key in ('head', 'handle')]
+        if raw_index[last['timeMs']] < len(raw) - 1:
+            tail_stops.append(raw[raw_index[last['timeMs']] + 1]['timeMs'])
+        tail_stops = [stop for stop in tail_stops if finite(stop)]
+        if tail_stops:
+            tail_gap_start = min(tail_stops)
     start_grip, top_grip = nearest(grips, takeaway), nearest(grips, top)
     levels = matched_height_levels(stable_pairs, start_grip, top_grip, takeaway, top, impact_ms, height)
     matched = next((row for row in levels if row['heightFraction'] == .5 and row['status'] == 'observation'), None)
@@ -131,11 +153,14 @@ def observe(analysis, impact_ms):
         gaps = [b['timeMs']-a['timeMs'] for a,b in zip(selected, selected[1:])]
         boundary_gap = max((selected[0]['timeMs']-start, end-selected[-1]['timeMs'])) if selected else end-start
         max_gap = max([boundary_gap, *gaps])
-        linked = [(a,b) for a,b in zip(selected, selected[1:]) if b['timeMs']-a['timeMs'] <= 50]
+        linked = [(a,b) for a,b in zip(selected, selected[1:])
+                  if b['timeMs']-a['timeMs'] <= 50 and (a['timeMs'],b['timeMs']) not in gap_edges]
         covered_ms = sum(b['timeMs']-a['timeMs'] for a,b in linked)
         angular_steps = [angle_delta(a['shaftDirectionDeg'], b['shaftDirectionDeg']) for a,b in linked]
         spikes = sum(abs(step) > 60 for step in angular_steps)
-        usable = len(selected) >= 4 and max_gap <= 50 and spikes == 0
+        missing = (any(gap_start < end and gap_end > start for gap_start, gap_end in known_gaps)
+                   or (tail_gap_start is not None and tail_gap_start <= end))
+        usable = len(selected) >= 4 and max_gap <= 50 and spikes == 0 and not missing
         first, last = nearest(selected, start), nearest(selected, end)
         summaries.append({
             'phase': name, 'startMs': start, 'endMs': end, 'pairedFrames': len(selected),
@@ -164,7 +189,7 @@ def observe(analysis, impact_ms):
     return {'jobId':analysis.get('jobId'),'status':'research_observation','automaticCoachingReady':False,'imageSize':{'width':width,'height':height},
             'boundarySource':{'takeaway':'legacy_candidate','top':'smoothed_grip_height_candidate','impact':'pose_tcn_candidate'},
             'coordinateConvention':'image pixels; shaft direction grip to head, counterclockwise from image right',
-            'limits':['2D projection, not 3D shaft plane or anatomical wrist angle','candidate boundaries, not human ground truth','confidence/gap gates are engineering guards, not validated golf thresholds','no good/bad, casting or ball-flight diagnosis'],
+            'limits':['2D projection, not 3D shaft plane or anatomical wrist angle','candidate boundaries, not human ground truth','confidence/gap gates are engineering guards, not validated golf thresholds','missing metadata rows are unknown without the source frame timeline','no good/bad, casting or ball-flight diagnosis'],
             'phases':summaries,'anchors':anchors,'matchedGripHeight':matched,'matchedGripHeights':levels,
             'sensitivityScope':'deterministic endpoint-radius bounds including height-based frame reselection; phase boundaries, accepted detections, camera and timestamps fixed; not confidence intervals or measured accuracy','shortProjectedSegments':len(pairs)-len(stable_pairs)}
 

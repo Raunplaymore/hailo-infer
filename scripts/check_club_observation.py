@@ -35,6 +35,37 @@ class ObservationsTest(unittest.TestCase):
             if 300<=f['timeMs']<=400:f['head']['confidence']=.1
         phase=observe(a,500)['phases'][-1]
         self.assertEqual(phase['status'],'withheld');self.assertIsNone(phase['shaftRotation2dDeg'])
+
+    def test_short_known_gaps_are_not_counted_as_observed_motion(self):
+        for kind in ('missing_head','missing_handle','low_confidence','short_segment','removed_row','break_marker'):
+            with self.subTest(kind=kind):
+                a=sample(); rows=a['overlay']['clubFrames']; before, missing, after=rows[15:18]
+                if kind=='missing_head': missing.pop('head')
+                if kind=='missing_handle': missing.pop('handle')
+                if kind=='low_confidence': missing['head']['confidence']=.1
+                if kind=='short_segment': missing['head'].update(x=missing['handle']['x'],y=missing['handle']['y'])
+                if kind=='removed_row':
+                    before['headValidUntilMs']=320; after['headBreakBefore']=True; rows.remove(missing)
+                if kind=='break_marker': after['headBreakBefore']=True
+                phase=observe(a,500)['phases'][-1]
+                self.assertEqual(phase['status'],'withheld')
+                self.assertIsNone(phase['shaftRotation2dDeg'])
+                self.assertIsNone(phase['gripShiftImageHeightPct'])
+                self.assertLess(phase['observedTimeFraction'],1)
+
+    def test_gaps_crossing_phase_start_or_at_its_end_are_withheld(self):
+        a=sample(); rows=a['overlay']['clubFrames']; rows[12].pop('head')
+        self.assertEqual(observe(a,500)['phases'][-1]['status'],'withheld')
+        for explicit_stop in (False, True):
+            a=sample(); rows=a['overlay']['clubFrames']; rows[-1].pop('head')
+            if explicit_stop: rows[-2]['headValidUntilMs']=490
+            self.assertEqual(observe(a,500)['phases'][-1]['status'],'withheld')
+
+    def test_gap_ending_at_phase_start_does_not_affect_later_phase(self):
+        a=sample(); a['overlay']['clubFrames'][11].pop('head')
+        phases=observe(a,500)['phases']
+        self.assertEqual(phases[0]['status'],'withheld')
+        self.assertEqual(phases[-1]['status'],'observation')
     def test_invalid_clock_and_outside_impact(self):
         for mutation in ('clock','order','outside'):
             a=copy.deepcopy(sample())
