@@ -26,7 +26,7 @@ def summarize(rows):
 positive = summarize(samples())
 assert positive["evidence"]["observation"] == "toward_ball"
 assert positive["diagnosisStatus"] == "unvalidated" and "practice" not in positive
-assert "임팩트 후보" in positive["summary"] and "추정한 공 방향" in positive["summary"]
+assert "검사한 구간" in positive["summary"] and "추정한 공 방향" in positive["summary"]
 assert positive["evidence"]["focusMs"] <= 960
 assert positive["evidence"]["endMs"] == 920, "replay ends at the last measured pre-impact sample"
 assert positive["evidence"]["endMs"] < positive["evidence"]["impactMs"]
@@ -68,6 +68,24 @@ bad = samples(); bad[0]["edgePx"] += 10
 assert summarize(bad)["reason"] == "ADDRESS_UNSTABLE"
 assert summarize([s for s in samples() if not 650 < s["timeMs"] < 850])["status"] == "unavailable"
 assert summarize(samples() + [samples()[0]])["status"] == "unavailable"
+height_changed = samples()
+for row in height_changed:
+    if not row["baseline"] and row["timeMs"] <= 960:
+        row["y"] += 16 / 480
+assert summarize(height_changed)["reason"] == "PELVIS_HEIGHT_UNCERTAIN"
+height_at_limit = samples()
+for row in height_at_limit:
+    if not row["baseline"]:
+        row["y"] += 6 / 480
+assert summarize(height_at_limit)["status"] == "ready", "the sampling-band boundary remains usable"
+after_impact_height = samples()
+for row in after_impact_height:
+    if row["timeMs"] >= 980:
+        row["y"] += 16 / 480
+assert summarize(after_impact_height)["status"] == "ready", "post-impact height is outside the observed interval"
+address_height = samples()
+address_height[0]["y"] += 16 / 480
+assert summarize(address_height)["reason"] == "PELVIS_HEIGHT_UNCERTAIN"
 
 points = {f"{side}_{joint}": [x, .4 if joint == "shoulder" else .6, .99] for joint, x in (("hip", .4), ("shoulder", .48), ("wrist", .55)) for side in ("left", "right")}
 body = {"frames": [{"timeMs": t, "keypointSource": "observed", "keypoints": copy.deepcopy(points)} for t in (70,100,130)]}
@@ -191,6 +209,17 @@ else:
     result = SimpleNamespace(pose_landmarks=SimpleNamespace(landmark=hips), segmentation_mask=mask)
     assert review._silhouette(result, 1, 270, 480)["edgePx"] == 80
     assert review._silhouette(result, -1, 270, 480)["edgePx"] == 149
+    sloped_mask = np.zeros((480,270), dtype="float32")
+    cv2.fillPoly(sloped_mask, [np.array([[40,100],[120,400],[190,400],[190,100]], dtype=np.int32)], 1)
+    def fixed_contour(y):
+        points = [SimpleNamespace(x=.46,y=y,visibility=.99) for _ in range(33)]
+        return review._silhouette(SimpleNamespace(pose_landmarks=SimpleNamespace(landmark=points),
+                                                  segmentation_mask=sloped_mask), 1, 270, 480)
+    base, shifted_height = fixed_contour(.6), fixed_contour(.6+16/480)
+    assert base and shifted_height and shifted_height["edgePx"] > base["edgePx"]
+    stationary = [{**base,"timeMs":t,"baseline":True,"cameraStable":True} for t in (100,134,168)]
+    stationary += [{**shifted_height,"timeMs":t,"baseline":False,"cameraStable":True} for t in range(500,921,60)]
+    assert summarize(stationary)["reason"] == "PELVIS_HEIGHT_UNCERTAIN", "height alone must not become a forward movement observation"
     transform = cv2.getRotationMatrix2D((135,240), .6, 1.01)
     transform[:,2] += [2,-3]
     xy = transform @ np.array([.42*270,.6*480,1])

@@ -37,10 +37,12 @@ jobs:
           python scripts/check_club_timeline.py
           python scripts/check_club_observation.py
           python scripts/check_club_gap_markers.py
+          python scripts/check_club_body_source.py
 
       - name: Check saved-video posture review
         run: |
           python scripts/check_practice_review.py
+          python scripts/check_pose_overlay.py
           python scripts/check_movement_guide.py
           python scripts/check_coaching_review.py
 

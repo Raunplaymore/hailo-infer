@@ -12,7 +12,7 @@ from app.services.impact_review import stat_identity
 from app.services.practice_review import load_practice_body, number
 
 VERSION = "dtl-coaching-review-v1"
-CACHE_REVISION = 5
+CACHE_REVISION = 6
 REVIEW_LOCK = threading.Lock()
 
 
@@ -74,6 +74,10 @@ def summarize_observation(samples, job_id, impact_ms, width, height, direction):
                        "referenceTop": [round(v, 6) for v in top], "referenceBottom": [round(v, 6) for v in bottom]})
     if spread > 3:
         return unavailable(job_id, "ADDRESS_UNSTABLE")
+    # shortcut: overlapping sampled bands do not prove anatomical correspondence; validate against independent labels.
+    radius = max(3, round(height * .0125))
+    if any(abs(s["y"] - baseline_y) * height > radius for s in base + before):
+        return unavailable(job_id, "PELVIS_HEIGHT_UNCERTAIN")
     # Pixel uncertainty only; this is not an anatomical or golf-fault threshold.
     noise = max(2.0, spread * 2, max(s["uncertaintyPx"] + s.get("registrationErrorPx", 0) for s in samples) * 2)
     shifts = [(s["edgePx"] - baseline) * direction for s in before]
@@ -82,7 +86,7 @@ def summarize_observation(samples, job_id, impact_ms, width, height, direction):
     focus = before[max(sustained, key=lambda i: shifts[i])] if sustained else before[max(range(len(before)), key=lambda i: shifts[i])]
     observation = "toward_ball" if sustained else "no_clear_shift"
     return {**result, "status": "ready", "reason": None,
-            "summary": "임팩트 후보 전, 골반 뒤쪽 윤곽이 시작 기준선보다 추정한 공 방향에 보입니다." if sustained else
+            "summary": "검사한 구간에서 골반 뒤쪽 윤곽이 시작 기준선보다 추정한 공 방향에 보입니다." if sustained else
                        "검사한 구간에서 골반 뒤쪽 윤곽의 뚜렷한 추정 공 방향 이동은 찾지 못했습니다.",
             "evidence": {"addressMs": min(base, key=lambda s: abs(s["edgePx"] - baseline))["timeMs"],
                          "startMs": before[0]["timeMs"], "endMs": before[-1]["timeMs"],

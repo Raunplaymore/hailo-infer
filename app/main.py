@@ -14,6 +14,7 @@ from app.schemas import (
     ImpactReviewRequest,
     PracticeReviewRequest,
     PracticeFramesRequest,
+    PoseOverlayRequest,
     JobCreateRequest,
     JobCreateResponse,
     JobStatusResponse,
@@ -27,6 +28,7 @@ from app.services.club_observation import observe
 from app.services.meta_loader import MetaLoadError, load_meta
 from app.services.result_completion import is_complete_coach_result
 from app.services.practice_review import review_saved_body, preview_saved_body
+from app.services.pose_overlay import read_pose_overlay
 from app.services.coaching_review import CoachingBusy, review_coaching
 
 APP_VERSION = "0.1.0"
@@ -176,6 +178,7 @@ def analyze_club_sidecar(payload: ClubSidecarRequest) -> ClubSidecarResponse:
         result = analyze_meta(
             load_meta(payload.metaPath), job_id=payload.jobId, force=False,
             body_path=payload.bodyPath, takeaway_profile=payload.takeawayProfile,
+            allow_body_fallback=payload.allowBodyFallback,
         )
         if payload.impactMs is not None:
             try:
@@ -187,7 +190,8 @@ def analyze_club_sidecar(payload: ClubSidecarRequest) -> ClubSidecarResponse:
             except ValueError as exc:
                 result["clubObservations"] = {"status": "withheld", "revision": 1,
                     "automaticCoachingReady": False, "reason": str(exc), "levels": []}
-        return ClubSidecarResponse(ok=True, jobId=payload.jobId, result=result)
+        return ClubSidecarResponse(ok=True, jobId=payload.jobId, result=result,
+                                   bodyFallbackAllowed=payload.allowBodyFallback)
     except (CoachError, MetaLoadError) as exc:
         error_code = exc.code if isinstance(exc, CoachError) else "META_LOAD_FAILED"
         raise HTTPException(
@@ -302,6 +306,14 @@ def practice_review(payload: PracticeReviewRequest) -> dict:
         raise HTTPException(status_code=404, detail="저장된 자세 분석이 없습니다. 영상을 먼저 분석해 주세요.") from exc
     except (ValueError, OSError, TypeError, KeyError, subprocess.SubprocessError) as exc:
         raise HTTPException(status_code=422, detail="선택 구간 또는 영상과 자세 분석의 연결을 확인할 수 없습니다. 영상을 다시 분석하고 장면을 선택해 주세요.") from exc
+
+
+@app.post("/v1/pose-overlay")
+def pose_overlay(payload: PoseOverlayRequest) -> dict:
+    try:
+        return read_pose_overlay(settings, payload)
+    except (ValueError, OSError, TypeError, KeyError, subprocess.SubprocessError) as exc:
+        raise HTTPException(status_code=422, detail="영상과 자세 표시의 연결을 확인하지 못했습니다.") from exc
 
 
 @app.post("/v1/practice-preview")

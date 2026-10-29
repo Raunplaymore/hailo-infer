@@ -675,12 +675,13 @@ def _smooth_speeds(speeds: List[float]) -> List[float]:
     return smoothed
 
 
-def _load_body_artifact(job_id: str, body_path: Optional[str]) -> Optional[Dict[str, Any]]:
+def _load_body_artifact(job_id: str, body_path: Optional[str], *, allow_default: bool = True) -> Optional[Dict[str, Any]]:
     candidates: List[Path] = []
     if body_path:
         candidates.append(Path(body_path))
-    data_dir = Path(os.getenv("DATA_DIR", "/home/ray/data"))
-    candidates.append(data_dir / "body" / f"{job_id}.json")
+    if allow_default:
+        data_dir = Path(os.getenv("DATA_DIR", "/home/ray/data"))
+        candidates.append(data_dir / "body" / f"{job_id}.json")
     for path in candidates:
         if not path.exists():
             continue
@@ -2374,6 +2375,8 @@ def analyze_meta(
     force: bool,
     body_path: Optional[str] = None,
     takeaway_profile: Optional[str] = None,
+    *,
+    allow_body_fallback: bool = True,
 ) -> Dict[str, object]:
     frames = meta.get("frames", [])
     if not isinstance(frames, list) or not frames:
@@ -2402,7 +2405,9 @@ def analyze_meta(
         coordinate_y_scale=coordinate_y_scale,
     )
     person_track = _select_best_track(frames, PERSON_LABELS)
-    body_artifact = _load_body_artifact(job_id, body_path)
+    body_artifact = _load_body_artifact(job_id, body_path, allow_default=allow_body_fallback)
+    if body_artifact is None and not allow_body_fallback:
+        raise CoachError("BODY_UNAVAILABLE", "The requested body artifact is missing or unreadable")
     visible_grip_enabled = os.getenv("VISIBLE_GRIP_TRACK_ENABLED", "0").strip().lower() in {"1", "true", "yes", "on"}
     wrist_track = _wrist_track_from_body(body_artifact, lock_visible_side=visible_grip_enabled)
     club_head_track = _filter_track_by_wrist(

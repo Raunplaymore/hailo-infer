@@ -31,6 +31,12 @@ class JobCreateResponse(BaseModel):
     status: Literal["queued", "running", "succeeded", "failed", "canceled"]
 
 
+class PoseOverlayRequest(BaseModel):
+    jobId: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    inputPath: str
+    bodyPath: str
+
+
 class PracticeFramesRequest(BaseModel):
     impactMs: Optional[float] = Field(default=None, ge=0, le=30000, allow_inf_nan=False, strict=True)
     jobId: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
@@ -256,6 +262,7 @@ class ClubSidecarRequest(BaseModel):
     jobId: str
     metaPath: str
     bodyPath: Optional[str] = None
+    allowBodyFallback: bool = Field(default=True, strict=True)
     takeawayProfile: Optional[str] = None
     impactMs: Optional[float] = Field(default=None, ge=0, allow_inf_nan=False)
 
@@ -264,6 +271,7 @@ class ClubSidecarResponse(BaseModel):
     ok: bool
     jobId: str
     result: Dict[str, Any]
+    bodyFallbackAllowed: bool = True
 
 
 class ImpactReviewRequest(BaseModel):
