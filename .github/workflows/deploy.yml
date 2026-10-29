@@ -37,6 +37,7 @@ jobs:
           python scripts/check_club_timeline.py
           python scripts/check_club_observation.py
           python scripts/check_club_gap_markers.py
+          python scripts/check_club_head_ambiguity.py
           python scripts/check_club_body_source.py
 
       - name: Check saved-video posture review

@@ -178,7 +178,7 @@ def analyze_club_sidecar(payload: ClubSidecarRequest) -> ClubSidecarResponse:
         result = analyze_meta(
             load_meta(payload.metaPath), job_id=payload.jobId, force=False,
             body_path=payload.bodyPath, takeaway_profile=payload.takeawayProfile,
-            allow_body_fallback=payload.allowBodyFallback,
+            allow_body_fallback=payload.allowBodyFallback, withhold_ambiguous_club_heads=True,
         )
         if payload.impactMs is not None:
             try:

@@ -37,6 +37,7 @@ class ClubBodySourceTest(unittest.TestCase):
             strict = analyze_club_sidecar(ClubSidecarRequest(jobId="job", metaPath="meta", allowBodyFallback=False))
             self.assertFalse(strict.bodyFallbackAllowed)
             self.assertFalse(analyze.call_args.kwargs["allow_body_fallback"])
+            self.assertTrue(analyze.call_args.kwargs["withhold_ambiguous_club_heads"])
             legacy = analyze_club_sidecar(ClubSidecarRequest(jobId="job", metaPath="meta"))
             self.assertTrue(legacy.bodyFallbackAllowed)
             self.assertTrue(analyze.call_args.kwargs["allow_body_fallback"])

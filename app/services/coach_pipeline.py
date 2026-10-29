@@ -347,6 +347,23 @@ def _select_best_track(frames: List[dict], labels: Iterable[str]) -> List[dict]:
     return track
 
 
+def _ambiguous_club_head_frames(frames: List[dict]) -> set:
+    ambiguous = set()
+    for index, frame in enumerate(frames):
+        candidates = []
+        for det in _frame_detections(frame):
+            if not isinstance(det, dict) or _detection_label(det) not in CLUBHEAD_LABELS or _detection_conf(det) < 0.3:
+                continue
+            box = _bbox_xywh(det)
+            if box is not None:
+                x, y, width, height = box
+                if width > 0 and height > 0 and 0 <= x + width / 2 <= 1 and 0 <= y + height / 2 <= 1:
+                    candidates.append(det)
+        if len(candidates) >= 2:
+            ambiguous.add(_safe_int(frame.get("frame", index), index))
+    return ambiguous
+
+
 def _filter_track_by_wrist(
     track: List[dict],
     wrist_track: List[dict],
@@ -2377,6 +2394,7 @@ def analyze_meta(
     takeaway_profile: Optional[str] = None,
     *,
     allow_body_fallback: bool = True,
+    withhold_ambiguous_club_heads: bool = False,
 ) -> Dict[str, object]:
     frames = meta.get("frames", [])
     if not isinstance(frames, list) or not frames:
@@ -2690,7 +2708,11 @@ def analyze_meta(
     for point in grip_track:
         source_name = str(point.get("source") or "unknown")
         grip_sources[source_name] = grip_sources.get(source_name, 0) + 1
-    overlay = _build_overlay_payload(body_artifact, club_head_track, handle_track, frames)
+    ambiguous = _ambiguous_club_head_frames(frames) if withhold_ambiguous_club_heads else set()
+    overlay_heads = [point for point in club_head_track if point["frame"] not in ambiguous]
+    if withhold_ambiguous_club_heads:
+        tracking["ambiguousClubHeadFrames"] = len(ambiguous)
+    overlay = _build_overlay_payload(body_artifact, overlay_heads, handle_track, frames)
     if all(isinstance(time, (int, float)) and frame.get("sourceTimeMs") == time for frame, time in zip(frames, times_ms)):
         overlay["clubTimeSource"] = "video_pts"
 
