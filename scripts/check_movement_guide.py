@@ -26,6 +26,22 @@ assert g['tracks']['pelvis']['phase']=='before' and abs(g['tracks']['pelvis']['f
 assert g['tracks']['head']['focusTimeMs'] <= 1000, 'head review should start at or before the impact candidate'
 assert any(p['timeMs'] > 1000 for p in g['tracks']['head']['points']), 'post-impact review must remain available'
 assert 'diagnosis' not in g and 'practice' not in g
+for t in (300,600,900,1110):
+    bad=copy.deepcopy(body)
+    next(f for f in bad['frames'] if f['timeMs']==t)['keypoints']['nose'][2]=.2
+    assert set(build(bad).get('tracks',{}))=={'pelvis'}, 'a missing head sample must not use an adjacent point'
+    bad=copy.deepcopy(body)
+    next(f for f in bad['frames'] if f['timeMs']==t)['keypoints']['left_hip'][2]=.2
+    assert set(build(bad).get('tracks',{}))=={'head'}, 'a missing hip sample must not use an adjacent point'
+bad=copy.deepcopy(body)
+next(f for f in bad['frames'] if f['timeMs']==600)['keypointSource']='interpolated'
+assert build(bad)['status']=='unavailable', 'an unobserved frame must not produce either track'
+bad=copy.deepcopy(body)
+for t in (0,1350):next(f for f in bad['frames'] if f['timeMs']==t)['keypointSource']='interpolated'
+assert set(build(bad)['tracks'])=={'head','pelvis'}, 'samples outside the guide interval must not hide it'
+bad=copy.deepcopy(body)
+next(f for f in bad['frames'] if f['timeMs']==600)['keypoints']['nose'][1]+=.05
+assert set(build(bad).get('tracks',{}))=={'pelvis'}, 'unstable smoothed samples must not create a complete track'
 bad=copy.deepcopy(body)
 for f in bad['frames']: f['keypoints']['nose'][2]=.2
 assert set(build(bad)['tracks'])=={'pelvis'},'head rejection must not hide a valid pelvis'

@@ -69,6 +69,9 @@ def build_movement_guide(body, address_ms, impact_ms):
                 if value is not None:
                     points.append(value)
         points = list({p["timeMs"]: p for p in points}.values())
+        point_times = {p["timeMs"] for p in points}
+        if any(f["timeMs"] not in point_times for f in frames if baseline["timeMs"] <= f["timeMs"] <= min(duration, impact_ms + 250)):
+            continue
         near = [p for p in points if max(baseline["timeMs"] + 150, impact_ms - 500) <= p["timeMs"] <= impact_ms + 200]
         # Do not call a sparse surviving sample the largest movement of a phase.
         if len(near) < 6 or near[0]["timeMs"] > impact_ms - 350 or near[-1]["timeMs"] < impact_ms + 80 or any(b["timeMs"] - a["timeMs"] > 100 for a, b in zip(near, near[1:])):
