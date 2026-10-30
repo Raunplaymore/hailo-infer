@@ -12,7 +12,7 @@ def sample():
     frames=[]
     for t in range(0,501,20):
         a=math.radians(30+t*.3);x=.5;y=.2+(t-240)**2/1_000_000
-        frames.append({'frame':t//20,'timeMs':t,'handle':{'x':x,'y':y,'confidence':.9},'head':{'x':x+.08*math.cos(a),'y':y-.04*math.sin(a),'confidence':.9}})
+        frames.append({'frame':t//20,'timeMs':t,'handle':{'x':x,'y':y,'confidence':.9,'frameEdge':False},'head':{'x':x+.08*math.cos(a),'y':y-.04*math.sin(a),'confidence':.9,'frameEdge':False}})
     return {'jobId':'test','meta':{'width':1000,'height':2000},'events':{'takeawayMs':0},'overlay':{'clubTimeSource':'video_pts','clubFrames':frames,'poseFrames':[]}}
 
 
@@ -78,6 +78,11 @@ class ObservationsTest(unittest.TestCase):
             r=math.radians(170+f['timeMs']*.05);g=f['handle'];f['head'].update(x=g['x']+.08*math.cos(r),y=g['y']-.04*math.sin(r))
         self.assertAlmostEqual(observe(a,500)['phases'][0]['shaftRotation2dDeg'],12)
 
+    def test_edge_or_unknown_frame_withholds_phase(self):
+        for edge in (True, None):
+            a=sample(); a['overlay']['clubFrames'][16]['head']['frameEdge']=edge
+            self.assertEqual(observe(a,500)['phases'][-1]['status'],'withheld')
+
 class SensitivityTest(unittest.TestCase):
     def test_inclination_folds_vertical_and_horizontal(self):
         self.assertEqual(inclination(179),1)
@@ -115,7 +120,7 @@ class SensitivityTest(unittest.TestCase):
 
     def test_height_match_can_disappear_under_error(self):
         def row(t,y):
-            return {'timeMs':t,'handle':{'y':y},'shaftDirectionDeg':45,'projectedLengthPx':300}
+            return {'timeMs':t,'head':{'frameEdge':False},'handle':{'y':y,'frameEdge':False},'shaftDirectionDeg':45,'projectedLengthPx':300}
         pairs=[row(100,.519),row(300,.519)]
         level=matched_height_levels(pairs,{'handle':{'y':.8}},{'handle':{'y':.2}},0,200,400,1000)[2]
         self.assertEqual(level['status'],'observation')
@@ -123,7 +128,7 @@ class SensitivityTest(unittest.TestCase):
 
     def test_reselection_can_reverse_nominal_difference(self):
         def row(t,y,angle):
-            return {'timeMs':t,'handle':{'y':y},'shaftDirectionDeg':angle,'projectedLengthPx':300}
+            return {'timeMs':t,'head':{'frameEdge':False},'handle':{'y':y,'frameEdge':False},'shaftDirectionDeg':angle,'projectedLengthPx':300}
         # At 50% height the exact match is +10deg, but a nearby downswing
         # frame has -10deg; endpoint error can change which frame is selected.
         pairs=[row(100,.5,40),row(300,.5,50),row(320,.505,30)]
@@ -132,5 +137,20 @@ class SensitivityTest(unittest.TestCase):
         self.assertEqual(middle['inclinationDifferenceDeg'],10)
         self.assertEqual(middle['sensitivity'][0]['direction'],'unresolved')
         self.assertEqual(middle['sensitivity'][0]['candidateFrameCounts'],[1,2])
+
+    def test_edge_in_selected_or_possible_reselected_frame_withholds_direction(self):
+        def row(t,y,angle):
+            return {'timeMs':t,'head':{'frameEdge':False},'handle':{'y':y,'frameEdge':False},
+                    'shaftDirectionDeg':angle,'projectedLengthPx':300}
+        pairs=[row(100,.5,40),row(300,.5,50),row(320,.51,50)]
+        anchors=({'handle':{'y':.8}},{'handle':{'y':.2}})
+        pairs[2]['head']['frameEdge']=True
+        level=matched_height_levels(pairs,*anchors,0,200,400,1000)[2]
+        self.assertEqual(level['sensitivity'][0]['direction'],'steeper')
+        self.assertEqual(level['sensitivity'][1]['direction'],'pair_uncertain')
+        self.assertTrue(level['sensitivity'][1]['frameEdgeRisk'])
+        pairs[0]['handle']['frameEdge']=None
+        level=matched_height_levels(pairs,*anchors,0,200,400,1000)[2]
+        self.assertTrue(all(test['direction']=='pair_uncertain' and test['frameEdgeRisk'] for test in level['sensitivity']))
 
 if __name__=='__main__':unittest.main()

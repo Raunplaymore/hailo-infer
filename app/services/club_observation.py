@@ -38,6 +38,11 @@ def inclination_bounds(row, radius_px):
     return [max(0.0, angle-error), min(90.0, angle+error)]
 
 
+def frame_edge_risk(row):
+    return any(not isinstance(row.get(key), dict) or row[key].get('frameEdge') is not False
+               for key in ('head', 'handle'))
+
+
 def matched_height_levels(pairs, start_grip, top_grip, takeaway, top, impact_ms, height):
     if not start_grip or not top_grip or start_grip['handle']['y']-top_grip['handle']['y'] <= .05:
         return []
@@ -56,19 +61,21 @@ def matched_height_levels(pairs, start_grip, top_grip, takeaway, top, impact_ms,
         for radius in (2, 5, 10):
             bounds = []
             counts = []
+            edge_risk = False
             for side, chosen in zip(sides, selected):
                 closest = abs(chosen['handle']['y']-target)
                 # Each candidate-to-target distance can change by 2r/H, so a
                 # competitor up to 4r/H behind the closest point can become best.
                 competitors = [p for p in side if abs(p['handle']['y']-target) <= closest+4*radius/height+1e-12]
                 intervals = [inclination_bounds(p, radius) for p in competitors]
+                edge_risk = edge_risk or any(frame_edge_risk(p) for p in competitors)
                 bounds.append([min(v[0] for v in intervals), max(v[1] for v in intervals)])
                 counts.append(len(competitors))
             low, high = bounds[1][0]-bounds[0][1], bounds[1][1]-bounds[0][0]
-            available = all(abs(p['handle']['y']-target)+2*radius/height <= .02 for p in selected)
+            available = all(abs(p['handle']['y']-target)+2*radius/height <= .02 for p in selected) and not edge_risk
             tests.append({'endpointRadiusPx':radius,'pairAvailabilityStable':available,'differenceBoundsDeg':[round(low,2),round(high,2)],
                           'direction':'pair_uncertain' if not available else 'steeper' if low>0 else 'flatter' if high<0 else 'unresolved',
-                          'candidateFrameCounts':counts})
+                          'candidateFrameCounts':counts, **({'frameEdgeRisk':True} if edge_risk else {})})
         results.append({'heightFraction':fraction,'status':'observation','targetGripY':target,
                         'backswing':before,'downswing':after,
                         'directionDifference2dDeg':round(angle_delta(before['shaftDirectionDeg'],after['shaftDirectionDeg']),1),
@@ -160,7 +167,7 @@ def observe(analysis, impact_ms):
         spikes = sum(abs(step) > 60 for step in angular_steps)
         missing = (any(gap_start < end and gap_end > start for gap_start, gap_end in known_gaps)
                    or (tail_gap_start is not None and tail_gap_start <= end))
-        usable = len(selected) >= 4 and max_gap <= 50 and spikes == 0 and not missing
+        usable = len(selected) >= 4 and max_gap <= 50 and spikes == 0 and not missing and not any(frame_edge_risk(p) for p in selected)
         first, last = nearest(selected, start), nearest(selected, end)
         summaries.append({
             'phase': name, 'startMs': start, 'endMs': end, 'pairedFrames': len(selected),

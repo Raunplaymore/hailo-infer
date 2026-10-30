@@ -606,6 +606,17 @@ def _mark_sampled_club_gaps(sampled: List[dict], club_by_frame: Dict[int, dict],
                 last_saved[key] = saved if valid else None
 
 
+def _club_box_touches_frame_edge(point: dict) -> Optional[bool]:
+    values = [point.get(key) for key in ("x", "y", "w", "h")]
+    if not all(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) for value in values):
+        return None
+    x, y, width, height = values
+    if width <= 0 or height <= 0:
+        return None
+    return (x - width / 2 <= 1e-9 or y - height / 2 <= 1e-9
+            or x + width / 2 >= 1 - 1e-9 or y + height / 2 >= 1 - 1e-9)
+
+
 def _build_overlay_payload(
     body_artifact: Optional[Dict[str, Any]], club_head_track: List[dict], handle_track: List[dict],
     metadata_frames: Optional[List[dict]] = None,
@@ -639,6 +650,9 @@ def _build_overlay_payload(
                 "y": round(_safe_float(point.get("y")), 6),
                 "confidence": round(_safe_float(point.get("conf")), 3),
             }
+            edge = _club_box_touches_frame_edge(point)
+            if edge is not None:
+                entry[key]["frameEdge"] = edge
     club_frames = sorted(club_by_frame.values(), key=lambda point: (point["timeMs"], point["frame"]))
     sampled_club_frames = _sample_overlay_points(club_frames)
     if metadata_frames:

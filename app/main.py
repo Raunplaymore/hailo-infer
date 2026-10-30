@@ -186,7 +186,7 @@ def analyze_club_sidecar(payload: ClubSidecarRequest) -> ClubSidecarResponse:
                 observation = observe(result, payload.impactMs)
                 result["clubObservations"] = {
                     "status": observation["status"], "automaticCoachingReady": False,
-                    "revision": 1, "levels": observation["matchedGripHeights"],
+                    "revision": 1, "edgeCheck": "bbox-v1", "levels": observation["matchedGripHeights"],
                 }
             except ValueError as exc:
                 result["clubObservations"] = {"status": "withheld", "revision": 1,
