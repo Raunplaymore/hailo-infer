@@ -30,6 +30,19 @@ def stat_identity(stat):
     return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
 
 
+def pose_stat_token(identity):
+    values = [str(value) for value in identity]
+    return hashlib.sha256(json.dumps(values, separators=(',', ':')).encode('ascii')).hexdigest()
+
+
+def read_stable_pose(path):
+    before = path.stat()
+    body = json.loads(path.read_text())
+    if stat_identity(before) != stat_identity(path.stat()):
+        raise ValueError("자세 분석을 읽는 동안 입력이 변경됐습니다.")
+    return body, stat_identity(before)
+
+
 def source_frames(source):
     before = stat_identity(source.stat())
     fps, times = _source_frames(source, before)
@@ -96,13 +109,14 @@ def review_impact(settings, job_id, input_path, body_path=None, input_confirmed=
     isolated.data_dir = settings.data_dir / "impact-review" / digest
     isolated.body_pose_target_fps = 30
     body = None
+    pose_path, pose_identity, pose_kind = None, None, None
     if body_path:
         cached_path = Path(body_path).resolve()
         if not cached_path.is_relative_to(settings.data_dir.resolve()):
             raise ValueError("허용된 자세 입력이 아닙니다.")
         try:
             cached_stat = cached_path.stat()
-            cached = json.loads(cached_path.read_text())
+            cached, cached_identity = read_stable_pose(cached_path)
             meta = cached.get("meta") if isinstance(cached, dict) else None
             cached_source = cached.get("source") if isinstance(cached, dict) else None
             input_path = cached_source.get("inputPath") if isinstance(cached_source, dict) else None
@@ -111,16 +125,22 @@ def review_impact(settings, job_id, input_path, body_path=None, input_confirmed=
                     and meta.get("sampleTargetFps") == 30
                     and cached_stat.st_mtime_ns >= source.stat().st_mtime_ns
                     and cached_stat.st_ctime_ns > source.stat().st_ctime_ns
-                    and stat_identity(cached_stat) == stat_identity(cached_path.stat())):
+                    and stat_identity(cached_stat) == cached_identity):
                 body = align_body_times(cached, times)
+                pose_path, pose_identity, pose_kind = cached_path, cached_identity, "provided"
         except (OSError, ValueError, TypeError):
             pass  # A stale or incomplete cache must not prevent fresh extraction.
     if body is None:
         isolated_cache = isolated.data_dir / "body" / "pose.json"
+        expected_cache = settings.data_dir.resolve() / "impact-review" / digest / "body" / "pose.json"
+        if isolated_cache.resolve() != expected_cache:
+            raise ValueError("격리 자세 입력의 경로를 확인할 수 없습니다.")
         rebuild = False
         if isolated_cache.exists():
             try:
-                body = align_body_times(json.loads(isolated_cache.read_text()), times)
+                cached, cached_identity = read_stable_pose(isolated_cache)
+                body = align_body_times(cached, times)
+                pose_path, pose_identity, pose_kind = isolated_cache, cached_identity, "isolated"
             except (OSError, ValueError, TypeError):
                 rebuild = True
         if body is None:
@@ -128,10 +148,22 @@ def review_impact(settings, job_id, input_path, body_path=None, input_confirmed=
                 settings=isolated, job_id="pose", filename=source.name,
                 input_path=str(source), force=rebuild,
             )
-            body = align_body_times(json.loads(Path(body_result["bodyPath"]).read_text()), times)
+            pose_path = Path(body_result["bodyPath"]).resolve()
+            if pose_path != expected_cache:
+                raise ValueError("격리 자세 입력의 경로를 확인할 수 없습니다.")
+            cached, pose_identity = read_stable_pose(pose_path)
+            body = align_body_times(cached, times)
+            pose_kind = "isolated"
     prediction = predict(body, MODEL)
     if source_identity != stat_identity(source.stat()):
         raise ValueError("임팩트 분석 중 영상이 변경됐습니다.")
+    try:
+        current_path = Path(body_path).resolve(strict=True) if pose_kind == "provided" else isolated_cache.resolve(strict=True)
+        expected_path = pose_path if pose_kind == "provided" else expected_cache
+        if current_path != expected_path or pose_identity != stat_identity(pose_path.stat()):
+            raise ValueError("임팩트 분석 중 자세 입력이 변경됐습니다.")
+    except OSError as exc:
+        raise ValueError("임팩트 분석 중 자세 입력이 변경됐습니다.") from exc
     impact_ms = prediction["events"]["impactMs"]
     if not math.isfinite(impact_ms) or not 0 <= impact_ms <= times[-1]:
         raise ValueError("임팩트 후보가 영상 범위를 벗어났습니다.")
@@ -140,6 +172,7 @@ def review_impact(settings, job_id, input_path, body_path=None, input_confirmed=
     return {
         "ok": True, "jobId": job_id, "status": "reference_candidate",
         "model": "pose-tcn-v1", "modelSha256": MODEL_SHA256, "videoSha256": digest, "timingRevision": 3,
+        "poseProvenance": {"version": 1, "kind": pose_kind, "statToken": pose_stat_token(pose_identity)},
         "requiresHumanConfirmation": True, "inputScopeConfirmed": bool(input_confirmed), "publicValue": None,
         "automaticCoachingReady": False, "appliedToPrimary": False,
         "candidate": {"frameIndex": frame, "timeMs": times[frame]},

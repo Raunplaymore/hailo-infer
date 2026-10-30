@@ -16,6 +16,15 @@ def pose_body(count):
             'frames': [{'frameIndex': i, 'timeMs': i * 33} for i in range(count)]}
 
 
+def fake_extract_from(source):
+    def extract(**kwargs):
+        target = kwargs['settings'].data_dir / 'body' / f"{kwargs['job_id']}.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+        return {'bodyPath': str(target)}
+    return extract
+
+
 class ImpactReviewChecks(unittest.TestCase):
     def test_isolated_derivative_and_withheld_contract(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -33,7 +42,7 @@ class ImpactReviewChecks(unittest.TestCase):
                 self.assertTrue(kwargs['settings'].data_dir.is_relative_to(original / 'impact-review'))
                 self.assertEqual(kwargs['settings'].body_pose_target_fps, 30)
                 self.assertFalse(kwargs['force'])
-                return {'bodyPath': str(body)}
+                return fake_extract_from(body)(**kwargs)
             with patch.object(review, 'source_frames', return_value=(30, [0, 33.333, 66.667, 100])), \
                  patch.object(review, 'analyze_body_video', side_effect=fake_body), \
                  patch.object(review, 'predict', return_value={'events': {'impactMs': 67}}):
@@ -57,7 +66,7 @@ class ImpactReviewChecks(unittest.TestCase):
             body.write_text(json.dumps(pose_body(5)))
             original_body = body.read_bytes()
             with patch.object(review, "source_frames", return_value=(30, [0, 10, 20, 100, 133])), \
-                 patch.object(review, "analyze_body_video", return_value={"bodyPath": str(body)}), \
+                 patch.object(review, "analyze_body_video", side_effect=fake_extract_from(body)), \
                  patch.object(review, "predict") as predict:
                 predict.return_value = {"events": {"impactMs": 67}}
                 result = review.review_impact(settings, "job", str(source))
@@ -127,7 +136,7 @@ class ImpactReviewChecks(unittest.TestCase):
             source = Path(temp) / 'video.mp4'; source.write_bytes(b'video')
             body = Path(temp) / 'body.json'
             with patch.object(review, 'source_frames', return_value=(30, [0, 10, 20, 100])), \
-                 patch.object(review, 'analyze_body_video', return_value={'bodyPath': str(body)}), \
+                 patch.object(review, 'analyze_body_video', side_effect=fake_extract_from(body)), \
                  patch.object(review, 'predict') as predict:
                 for indices in ([0, 1, 1, 3], [0, 1, 2, 4], [0, 1, 2], [0, 1, 2, True]):
                     payload = pose_body(len(indices))
@@ -229,7 +238,7 @@ class ImpactReviewChecks(unittest.TestCase):
                 source.write_bytes(b'changed video')
                 return {'events': {'impactMs': 67}}
             with patch.object(review, 'source_frames', return_value=(30, [0,33,67,100])), \
-                 patch.object(review, 'analyze_body_video', return_value={'bodyPath': str(body)}), \
+                 patch.object(review, 'analyze_body_video', side_effect=fake_extract_from(body)), \
                  patch.object(review, 'predict', side_effect=changing_source):
                 with self.assertRaisesRegex(ValueError, '변경'):
                     review.review_impact(settings, 'job', str(source))
@@ -249,7 +258,7 @@ class ImpactReviewChecks(unittest.TestCase):
             self.assertGreaterEqual(source.stat().st_ctime_ns, cached.stat().st_ctime_ns)
             fresh = settings.data_dir / 'fresh.json'; fresh.write_text(json.dumps(pose_body(4)))
             with patch.object(review, 'source_frames', return_value=(30, [0,33,67,100])), \
-                 patch.object(review, 'analyze_body_video', return_value={'bodyPath': str(fresh)}) as extract, \
+                 patch.object(review, 'analyze_body_video', side_effect=fake_extract_from(fresh)) as extract, \
                  patch.object(review, 'predict', return_value={'events': {'impactMs': 67}}):
                 review.review_impact(settings, 'job', str(source), str(cached), False)
             extract.assert_called_once()
@@ -283,12 +292,12 @@ class ImpactReviewChecks(unittest.TestCase):
             replacement = settings.data_dir / 'replacement.json'; replacement.write_text(json.dumps(pose_body(4)))
             outside = root / 'outside.json'; outside.write_text('{}')
             with patch.object(review, 'source_frames', return_value=(30, [0, 33.333, 66.667, 100])), \
-                 patch.object(review, 'analyze_body_video', return_value={'bodyPath': str(replacement)}) as extract, \
+                 patch.object(review, 'analyze_body_video', side_effect=fake_extract_from(replacement)) as extract, \
                  patch.object(review, 'predict', return_value={'events': {'impactMs': 67}}):
                 for path in (bad, settings.data_dir / 'missing.json', wrong_source, sparse, wrong_shape, wrong_frames):
                     result = review.review_impact(settings, 'job', str(source), str(path), False)
                     self.assertEqual(result['candidate'], {'frameIndex': 2, 'timeMs': 66.667})
-                self.assertEqual(extract.call_count, 6)
+                self.assertEqual(extract.call_count, 1)
                 with self.assertRaises(ValueError):
                     review.review_impact(settings, 'job', str(source), str(outside), False)
 
