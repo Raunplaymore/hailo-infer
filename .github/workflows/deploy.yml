@@ -34,6 +34,7 @@ jobs:
       - name: Check impact review
         run: |
           python scripts/test_impact_review.py
+          python -m unittest scripts.test_impact_pose_provenance
           python scripts/check_club_timeline.py
           python scripts/check_club_observation.py
           python scripts/check_club_frame_edges.py
