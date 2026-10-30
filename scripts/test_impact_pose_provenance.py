@@ -31,10 +31,16 @@ class PoseProvenanceChecks(unittest.TestCase):
 
     def write_pose(self, kind):
         if kind == 'provided':
-            time.sleep(.003)
             path = self.settings.data_dir / 'provided.json'
-            path.write_text(json.dumps(self.pose(provided=True)))
-            os.utime(path, ns=(self.video.stat().st_mtime_ns + 1_000_000,) * 2)
+            deadline = time.monotonic() + 2
+            while True:
+                path.write_text(json.dumps(self.pose(provided=True)))
+                os.utime(path, ns=(self.video.stat().st_mtime_ns + 1_000_000,) * 2)
+                if path.stat().st_ctime_ns > self.video.stat().st_ctime_ns:
+                    break
+                if time.monotonic() >= deadline:
+                    raise AssertionError('Filesystem did not advance pose ctime')
+                time.sleep(.01)
             return path, path
         digest = hashlib.sha256(self.video.read_bytes()).hexdigest()
         path = self.settings.data_dir / 'impact-review' / digest / 'body' / 'pose.json'
