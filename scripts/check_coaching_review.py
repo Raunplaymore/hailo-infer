@@ -277,4 +277,69 @@ else:
     assert review._silhouette(result, 1, 270, 480) is None, "second large foreground component must be rejected"
     print("background translation, texture, foreground exclusion and silhouette component checks passed")
 
+    import mediapipe as mp
+    assert review.CACHE_REVISION == 8, "the new reference must not reuse prior silhouette results"
+    class FakeCapture:
+        def __init__(self, mode):
+            self.mode, self.time, self.seeks = mode, 0, []
+        def set(self, _property, value):
+            self.time = value; self.seeks.append(value)
+            if self.mode == "seek" and value == 100:
+                raise cv2.error("reference seek failed")
+        def get(self, _property):
+            if self.mode == "nonfinite" and self.time == 100:
+                return float("nan")
+            offsets = {"timing": 51, "boundary": 20}
+            return self.time + (offsets.get(self.mode, 0) if self.time == 100 else 0)
+        def read(self):
+            if self.mode == "decode" and self.time == 100:
+                return False, None
+            if self.mode == "empty" and self.time == 100:
+                return True, None
+            return True, np.full((20, 20, 3), int(self.time) % 251, dtype="uint8")
+        def release(self):
+            pass
+    class FakePose:
+        def __init__(self, mode): self.mode = mode
+        def __enter__(self): return self
+        def __exit__(self, *_args): pass
+        def process(self, frame):
+            if self.mode == "pose_error" and frame[0,0,0] == 100:
+                raise RuntimeError("reference pose unavailable")
+            if self.mode == "mask_error" and frame[0,0,0] == 100:
+                class FailingMask:
+                    def copy(self): raise RuntimeError("reference mask unavailable")
+                return SimpleNamespace(pose_landmarks=object(), segmentation_mask=FailingMask())
+            missing = self.mode == "pose" and frame[0, 0, 0] == 100
+            return SimpleNamespace(pose_landmarks=None if missing else object(),
+                                   segmentation_mask=None if missing else np.zeros((20,20), dtype="float32"))
+    def reference_test(mode, impact):
+        capture = FakeCapture(mode); references = []
+        def background(first, _frame, _first_mask, _mask):
+            references.append(int(first[0,0])); return np.array([[1.,0.,0.],[0.,1.,0.]]), 0.
+        payload = SimpleNamespace(jobId="test", inputPath="/tmp/source.mp4", addressMs=0, impactMs=impact)
+        body = {"meta": {"durationMs": 1500}, "frames": []}
+        result = {**review.unavailable("test", "fixture"), "status": "ready"}
+        with patch.object(cv2, "VideoCapture", return_value=capture), \
+             patch.object(mp.solutions.pose, "Pose", return_value=FakePose(mode)), \
+             patch.object(review, "_direction", return_value=1), \
+             patch.object(review, "_background_motion", side_effect=background), \
+             patch.object(review, "_stabilize_pose", side_effect=lambda pose, *_args: pose), \
+             patch.object(review, "_silhouette", return_value={"edgePx": 8., "y": .5, "uncertaintyPx": 1.}), \
+             patch.object(review, "summarize_observation", return_value=result) as summarize_observation:
+            assert review._observe(body, payload)["status"] == "ready"
+        samples = summarize_observation.call_args.args[0]
+        assert [s["timeMs"] for s in samples if s["baseline"]] == [0,34,68], "reference choice must not move the baseline samples"
+        return capture.seeks, references
+    seeks, references = reference_test("valid", 1000)
+    assert seeks[0] == 100 and references[0] == 100, "use the nearby frame for background registration"
+    for mode in ("decode", "empty", "timing", "nonfinite", "pose", "seek", "pose_error", "mask_error"):
+        seeks, references = reference_test(mode, 1000)
+        assert seeks[0] == 100 and references[0] == 0, f"{mode} failure must preserve the original reference"
+    seeks, references = reference_test("boundary", 610)
+    assert seeks[0] == 100 and references[0] == 0, "actual reference must remain before the pre-impact interval"
+    seeks, references = reference_test("valid", 590)
+    assert seeks[0] == 0 and references[0] == 0, "never use a reference inside the pre-impact interval"
+    print("nearby registration reference, original baseline and fallback checks passed")
+
 print("coaching evidence timing, noise, mirror, calibration, source identity, caching and concurrency checks passed")

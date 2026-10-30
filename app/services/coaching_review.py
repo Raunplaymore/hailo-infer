@@ -12,7 +12,7 @@ from app.services.impact_review import stat_identity
 from app.services.practice_review import load_practice_body, number
 
 VERSION = "dtl-coaching-review-v1"
-CACHE_REVISION = 7
+CACHE_REVISION = 8
 REVIEW_LOCK = threading.Lock()
 
 
@@ -268,6 +268,22 @@ def _observe(body, payload):
     try:
         with mp.solutions.pose.Pose(static_image_mode=True, model_complexity=1, enable_segmentation=True,
                                     min_detection_confidence=.5) as pose:
+            # Keep the selected baseline samples; use a nearby frame only for registration.
+            anchor_requested = payload.addressMs + 100
+            if anchor_requested < start:
+                try:
+                    cap.set(cv2.CAP_PROP_POS_MSEC, anchor_requested)
+                    anchor_ok, anchor_frame = cap.read()
+                    anchor_actual = cap.get(cv2.CAP_PROP_POS_MSEC)
+                    if (anchor_ok and anchor_frame is not None and number(anchor_actual)
+                            and abs(anchor_actual-anchor_requested) <= 50 and anchor_actual < start):
+                        anchor_scale = min(1, 480/max(anchor_frame.shape[:2]))
+                        anchor_frame = cv2.resize(anchor_frame, (round(anchor_frame.shape[1]*anchor_scale), round(anchor_frame.shape[0]*anchor_scale)))
+                        anchor_pose = pose.process(cv2.cvtColor(anchor_frame, cv2.COLOR_BGR2RGB))
+                        if anchor_pose.pose_landmarks is not None and anchor_pose.segmentation_mask is not None:
+                            first_gray, first_mask = cv2.cvtColor(anchor_frame, cv2.COLOR_BGR2GRAY), anchor_pose.segmentation_mask.copy()
+                except (cv2.error, RuntimeError, OSError):
+                    pass  # Optional reference failure retains the original registration path.
             for index, requested in enumerate(times):
                 cap.set(cv2.CAP_PROP_POS_MSEC, requested)
                 ok, frame = cap.read()
