@@ -56,6 +56,34 @@ assert summarize(late)["evidence"]["observation"] == "no_clear_shift", "post-imp
 single = samples(0)
 single[6]["edgePx"] += 12
 assert summarize(single)["evidence"]["observation"] == "no_clear_shift", "single-frame spike is not sustained evidence"
+for shift in (0, 10):
+    sparse = [row for row in samples(0) if row["baseline"] or row["timeMs"] in (500, 560, 680, 740, 860, 920)]
+    for row in sparse:
+        if not row["baseline"]:
+            row["edgePx"] += shift
+    assert summarize(sparse)["reason"] == "PHASE_COVERAGE_INSUFFICIENT", "no eligible three-frame window cannot support an observation"
+late_sparse = [row for row in samples(0) if row["baseline"] or row["timeMs"] in (500, 560, 620, 740, 860, 920)]
+for row in late_sparse:
+    if not row["baseline"] and row["timeMs"] > 620:
+        row["edgePx"] += 10
+assert summarize(late_sparse)["reason"] == "PHASE_COVERAGE_INSUFFICIENT", "an early window cannot support a no-shift conclusion for an unobserved late phase"
+early_sparse = [row for row in samples(0) if row["baseline"] or row["timeMs"] in (500, 560, 680, 800, 860, 920)]
+assert summarize(early_sparse)["evidence"]["observation"] == "no_clear_shift", "a gap without an observed shift does not automatically suppress all results"
+near_gap = copy.deepcopy(early_sparse)
+for row in near_gap:
+    if not row["baseline"] and row["timeMs"] == 680:
+        row["edgePx"] += 10
+assert summarize(near_gap)["reason"] == "PHASE_COVERAGE_INSUFFICIENT", "a possible shift next to a missing interval needs review"
+raw_near_gap = copy.deepcopy(early_sparse)
+for row in raw_near_gap:
+    if not row["baseline"] and row["timeMs"] == 680:
+        row.update(edgePx=82, transform=[[1,0,1],[0,1,0]])
+assert summarize(raw_near_gap)["reason"] == "PHASE_COVERAGE_INSUFFICIENT", "an uncorrected possible shift next to a gap needs review"
+positive_sparse = copy.deepcopy(late_sparse)
+for row in positive_sparse:
+    if not row["baseline"]:
+        row["edgePx"] = 90
+assert summarize(positive_sparse)["evidence"]["observation"] == "toward_ball", "a supported three-frame movement can be replayed despite later gaps"
 mirrored = samples()
 for row in mirrored:
     row["edgePx"] = 270-row["edgePx"]
@@ -300,7 +328,7 @@ else:
     print("background translation, texture, foreground exclusion and silhouette component checks passed")
 
     import mediapipe as mp
-    assert review.CACHE_REVISION == 9, "the correction-consistency check must not reuse prior silhouette results"
+    assert review.CACHE_REVISION == 10, "the temporal coverage check must not reuse prior silhouette results"
     class FakeCapture:
         def __init__(self, mode):
             self.mode, self.time, self.seeks = mode, 0, []
@@ -315,6 +343,8 @@ else:
             return self.time + (offsets.get(self.mode, 0) if self.time == 100 else 0)
         def read(self):
             if self.mode == "decode" and self.time == 100:
+                return False, None
+            if self.mode == "sparse" and round(self.time) in (620, 800):
                 return False, None
             if self.mode == "empty" and self.time == 100:
                 return True, None
@@ -362,6 +392,17 @@ else:
     assert seeks[0] == 100 and references[0] == 0, "actual reference must remain before the pre-impact interval"
     seeks, references = reference_test("valid", 590)
     assert seeks[0] == 0 and references[0] == 0, "never use a reference inside the pre-impact interval"
+    capture = FakeCapture("sparse")
+    with patch.object(cv2, "VideoCapture", return_value=capture), \
+         patch.object(mp.solutions.pose, "Pose", return_value=FakePose("valid")), \
+         patch.object(review, "_direction", return_value=1), \
+         patch.object(review, "_background_motion", return_value=(np.array([[1.,0.,0.],[0.,1.,0.]]), 0.)), \
+         patch.object(review, "_stabilize_pose", side_effect=lambda pose, *_args: pose), \
+         patch.object(review, "_silhouette", return_value={"edgePx": 8., "y": .5, "uncertaintyPx": 1.}):
+        sparse_result = review._observe({"meta": {"durationMs": 1500}, "frames": []},
+                                        SimpleNamespace(jobId="test", inputPath="/tmp/source.mp4", addressMs=0, impactMs=1000))
+    assert sparse_result["reason"] == "PHASE_COVERAGE_INSUFFICIENT"
+    assert len(sparse_result["excludedFrames"]) == 2, "two missing frames leave no valid three-frame window"
     print("nearby registration reference, original baseline and fallback checks passed")
 
 print("coaching evidence timing, noise, mirror, calibration, source identity, caching and concurrency checks passed")

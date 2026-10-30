@@ -12,7 +12,7 @@ from app.services.impact_review import stat_identity
 from app.services.practice_review import load_practice_body, number
 
 VERSION = "dtl-coaching-review-v1"
-CACHE_REVISION = 9
+CACHE_REVISION = 10
 REVIEW_LOCK = threading.Lock()
 
 
@@ -103,11 +103,19 @@ def summarize_observation(samples, job_id, impact_ms, width, height, direction):
     image_shifts = [(image_x(s) - image_baseline) * direction for s in before]
     windows = [i for i in range(2, len(before))
                if all(before[j]["timeMs"]-before[j-1]["timeMs"] <= 85 for j in (i-1, i))]
+    if not windows:
+        return unavailable(job_id, "PHASE_COVERAGE_INSUFFICIENT")
     sustained = [i for i in windows if min(shifts[i-2:i+1]) > noise]
     # A replay window must remain sustained under both background assumptions.
     agreed = [i for i in sustained if min(image_shifts[i-2:i+1]) > noise]
     if not agreed and (sustained or any(min(image_shifts[i-2:i+1]) > noise for i in windows)):
         return unavailable(job_id, "CAMERA_BACKGROUND_AMBIGUOUS")
+    # A possible movement next to a gap cannot establish or rule out a sustained shift.
+    if not agreed and any((shifts[i] > noise or image_shifts[i] > noise) and
+                          ((i > 0 and before[i]["timeMs"]-before[i-1]["timeMs"] > 85) or
+                           (i+1 < len(before) and before[i+1]["timeMs"]-before[i]["timeMs"] > 85))
+                          for i in range(len(before))):
+        return unavailable(job_id, "PHASE_COVERAGE_INSUFFICIENT")
     focus = before[max(agreed, key=lambda i: shifts[i])] if agreed else before[max(range(len(before)), key=lambda i: shifts[i])]
     observation = "toward_ball" if agreed else "no_clear_shift"
     return {**result, "status": "ready", "reason": None,
