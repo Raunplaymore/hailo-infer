@@ -39,19 +39,28 @@ def build_movement_guide(body, address_ms, impact_ms):
 
     times = [f["timeMs"] for f in frames]
     observed = {kind: [point(f, kind) for f in frames] for kind in ("head", "pelvis")}
+    widened = {kind: set() for kind in ("head", "pelvis")}
 
-    def window(time_ms, kind):
+    def window(time_ms, kind, allow_wide=False):
         lo, hi = bisect_left(times, time_ms - 65), bisect_right(times, time_ms + 65)
         samples = [(times[i], observed[kind][i]) for i in range(lo, hi)]
         samples = [(t, p) for t, p in samples if p is not None]
+        used_wide = len(samples) < 3 and allow_wide
+        if used_wide:
+            # shortcut: wider smoothing is not verified location accuracy; validate with independent frame labels.
+            lo, hi = bisect_left(times, time_ms - 90), bisect_right(times, time_ms + 90)
+            samples = [(times[i], observed[kind][i]) for i in range(lo, hi) if observed[kind][i] is not None]
         if len(samples) < 3 or min(abs(t - time_ms) for t, _ in samples) > 40 or any(b[0] - a[0] > 70 for a, b in zip(samples, samples[1:])):
             return None
         x, y = (median(p[i] for _, p in samples) for i in (0, 1))
         if any(math.hypot((p[0]-x)*width/height, p[1]-y) > .02 for _, p in samples):
             return None
-        return {"timeMs": min(samples, key=lambda s: abs(s[0]-time_ms))[0], "x": round(x, 5), "y": round(y, 5)}
+        selected = min(samples, key=lambda s: abs(s[0]-time_ms))[0]
+        if used_wide:
+            widened[kind].add(selected)
+        return {"timeMs": selected, "x": round(x, 5), "y": round(y, 5)}
 
-    tracks = {}
+    tracks, partial_tracks = {}, {}
     for kind in ("head", "pelvis"):
         baseline = None
         for offset in (0, -33, 33, -66, 66, 100, 150):
@@ -63,18 +72,27 @@ def build_movement_guide(body, address_ms, impact_ms):
         if baseline is None:
             continue
         points = []
-        for f in frames:
+        for f, observation in zip(frames, observed[kind]):
             if baseline["timeMs"] <= f["timeMs"] <= min(duration, impact_ms + 250):
-                value = window(f["timeMs"], kind)
+                value = window(f["timeMs"], kind, True) if observation is not None else None
                 if value is not None:
                     points.append(value)
         points = list({p["timeMs"]: p for p in points}.values())
         point_times = {p["timeMs"] for p in points}
-        if any(f["timeMs"] not in point_times for f in frames if baseline["timeMs"] <= f["timeMs"] <= min(duration, impact_ms + 250)):
-            continue
+        missing = [f["timeMs"] for f in frames if baseline["timeMs"] <= f["timeMs"] <= min(duration, impact_ms + 250)
+                   and f["timeMs"] not in point_times]
         near = [p for p in points if max(baseline["timeMs"] + 150, impact_ms - 500) <= p["timeMs"] <= impact_ms + 200]
         # Do not call a sparse surviving sample the largest movement of a phase.
         if len(near) < 6 or near[0]["timeMs"] > impact_ms - 350 or near[-1]["timeMs"] < impact_ms + 80 or any(b["timeMs"] - a["timeMs"] > 100 for a, b in zip(near, near[1:])):
+            continue
+        if missing or widened[kind]:
+            candidates = [p for p in near if 0 <= impact_ms - p["timeMs"] <= 50]
+            if not candidates:
+                continue
+            focus = max(candidates, key=lambda p: p["timeMs"])
+            partial_tracks[kind] = {"baseline": baseline, "points": points, "focusTimeMs": focus["timeMs"],
+                                    "phase": "before" if focus["timeMs"] < impact_ms - 40 else "near",
+                                    "focusKind": "near_impact", "missingTimes": missing}
             continue
         def distance(p):
             dx = (p["x"] - baseline["x"]) * width / height
@@ -83,7 +101,12 @@ def build_movement_guide(body, address_ms, impact_ms):
         peak = max((p for p in near if kind != "head" or p["timeMs"] <= impact_ms), key=distance)
         tracks[kind] = {"baseline": baseline, "points": points, "focusTimeMs": peak["timeMs"],
                         "phase": "before" if peak["timeMs"] < impact_ms - 40 else "after" if peak["timeMs"] > impact_ms + 40 else "near"}
-    if not tracks:
+    if not tracks and not partial_tracks:
         return empty
-    return {"version": "movement-guide-v1", "status": "ready", "width": width, "height": height,
-            "impactMs": impact_ms, "tracks": tracks}
+    result = {"version": "movement-guide-v1", "coverageRevision": 1, "status": "ready" if tracks else "unavailable",
+              "width": width, "height": height, "impactMs": impact_ms}
+    if tracks:
+        result["tracks"] = tracks
+    if partial_tracks:
+        result["partialTracks"] = partial_tracks
+    return result

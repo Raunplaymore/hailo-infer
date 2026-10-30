@@ -1,5 +1,6 @@
 import copy
 import sys
+from statistics import median
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.services.movement_guide import build_movement_guide
@@ -29,13 +30,37 @@ assert 'diagnosis' not in g and 'practice' not in g
 for t in (300,600,900,1110):
     bad=copy.deepcopy(body)
     next(f for f in bad['frames'] if f['timeMs']==t)['keypoints']['nose'][2]=.2
-    assert set(build(bad).get('tracks',{}))=={'pelvis'}, 'a missing head sample must not use an adjacent point'
+    result=build(bad)
+    assert set(result.get('tracks',{}))=={'pelvis'}, 'a missing head sample must not become a complete track'
+    partial=result['partialTracks']['head']
+    assert t in partial['missingTimes'] and all(p['timeMs']!=t for p in partial['points']), 'a missing head sample must not use an adjacent point'
+    assert partial['focusKind']=='near_impact' and 0<=1000-partial['focusTimeMs']<=50
+    if t==600:
+        samples=[f['keypoints']['nose'][1] for f in bad['frames'] if abs(f['timeMs']-570)<=65 and f['keypoints']['nose'][2]>=.75]
+        neighbor=next(p for p in partial['points'] if p['timeMs']==570)
+        assert neighbor['y']==round(median(samples),5), 'an absent center must not overwrite its neighbor with a different smoothing window'
     bad=copy.deepcopy(body)
     next(f for f in bad['frames'] if f['timeMs']==t)['keypoints']['left_hip'][2]=.2
-    assert set(build(bad).get('tracks',{}))=={'head'}, 'a missing hip sample must not use an adjacent point'
+    result=build(bad)
+    assert set(result.get('tracks',{}))=={'head'}, 'a missing hip sample must not become a complete track'
+    partial=result['partialTracks']['pelvis']
+    assert t in partial['missingTimes'] and all(p['timeMs']!=t for p in partial['points']), 'a missing hip sample must not use an adjacent point'
 bad=copy.deepcopy(body)
 next(f for f in bad['frames'] if f['timeMs']==600)['keypointSource']='interpolated'
-assert build(bad)['status']=='unavailable', 'an unobserved frame must not produce either track'
+result=build(bad)
+assert result['status']=='unavailable' and set(result['partialTracks'])=={'head','pelvis'}, 'legacy clients must not treat partial tracks as complete'
+bad=copy.deepcopy(body)
+for t in (600,630):next(f for f in bad['frames'] if f['timeMs']==t)['keypoints']['nose'][2]=.2
+partial=build(bad)['partialTracks']['head']
+assert all(t in partial['missingTimes'] for t in (600,630)), 'consecutive absent samples remain explicit'
+bad=copy.deepcopy(fps30)
+bad['frames'][20]['keypoints']['nose'][2]=.2
+partial=build(bad)['partialTracks']['head']
+assert bad['frames'][20]['timeMs'] in partial['missingTimes']
+assert all(any(p['timeMs']==bad['frames'][i]['timeMs'] for p in partial['points']) for i in (19,21)), 'nearby observed frames may use the bounded wider smoothing window'
+bad=copy.deepcopy(body)
+for t in (960,990):next(f for f in bad['frames'] if f['timeMs']==t)['keypoints']['nose'][2]=.2
+assert 'head' not in build(bad).get('partialTracks',{}), 'do not invent a focus near impact when no observation is available'
 bad=copy.deepcopy(body)
 for t in (0,1350):next(f for f in bad['frames'] if f['timeMs']==t)['keypointSource']='interpolated'
 assert set(build(bad)['tracks'])=={'head','pelvis'}, 'samples outside the guide interval must not hide it'
