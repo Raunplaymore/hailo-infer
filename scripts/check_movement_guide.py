@@ -11,6 +11,17 @@ for t in range(0,1501,30):
 body={'meta':{'width':1080,'height':1920,'durationMs':1500},'frames':frames}
 def build(b): return build_movement_guide(b,100,1000)
 g=build(body);assert g['status']=='ready' and set(g['tracks'])=={'head','pelvis'}
+first=build_movement_guide(body,0,1000)
+assert first['status']=='ready' and all(track['baseline']['timeMs']==0 for track in first['tracks'].values()), 'the first selected frame must not be shifted to 100ms'
+fps30=copy.deepcopy(body)
+for i,frame in enumerate(fps30['frames']): frame['timeMs']=i*1000/30
+first30=build_movement_guide(fps30,0,1000)
+assert first30['status']=='ready' and all(abs(track['baseline']['timeMs']-1000/30)<.01 for track in first30['tracks'].values()), 'use the nearest stable window when the first frame has too few neighbors'
+hidden=copy.deepcopy(body)
+for frame in hidden['frames']:
+    if frame['timeMs'] < 200:
+        for point in frame['keypoints'].values(): point[2]=.2
+assert build_movement_guide(hidden,0,1000)['status']=='unavailable', 'do not silently substitute a distant frame when the selected start is obscured'
 assert g['tracks']['pelvis']['phase']=='before' and abs(g['tracks']['pelvis']['focusTimeMs']-900)<=30
 assert g['tracks']['head']['focusTimeMs'] <= 1000, 'head review should start at or before the impact candidate'
 assert any(p['timeMs'] > 1000 for p in g['tracks']['head']['points']), 'post-impact review must remain available'

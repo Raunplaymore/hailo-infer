@@ -26,6 +26,18 @@ def unavailable(job_id, reason):
             "summary": "이 영상에서는 골반 뒤쪽 윤곽을 안정적으로 확인하지 못했습니다."}
 
 
+def _exclusion_reason(result):
+    excluded = result.get("excludedFrames")
+    if (result.get("status") != "unavailable" or result.get("reason") != "SILHOUETTE_UNRELIABLE"
+            or not isinstance(excluded, list) or not 7 <= len(excluded) <= 14
+            or not all(isinstance(item, dict) and isinstance(item.get("reason"), str) for item in excluded)):
+        return result
+    for reason in ("CAMERA_MOTION_OR_BACKGROUND_UNCLEAR", "VIDEO_TIMING_UNAVAILABLE", "SILHOUETTE_UNRELIABLE"):
+        if sum(item["reason"] == reason for item in excluded) > len(excluded) / 2:
+            return {**result, "reason": reason}
+    return {**result, "reason": "PHASE_COVERAGE_INSUFFICIENT"}
+
+
 def summarize_observation(samples, job_id, impact_ms, width, height, direction):
     result = unavailable(job_id, "SILHOUETTE_UNRELIABLE")
     if direction not in (-1, 1) or not all(number(v) and v > 0 for v in (impact_ms, width, height)):
@@ -295,7 +307,7 @@ def _observe(body, payload):
     else:
         result = summarize_observation(samples, payload.jobId, payload.impactMs, width, height, direction)
     result["excludedFrames"] = excluded
-    return result
+    return _exclusion_reason(result)
 
 
 def _identity(payload):
@@ -317,7 +329,7 @@ def _read_cache(path, identity, job_id):
         if (value["identity"] == identity and result.get("version") == VERSION
                 and result.get("jobId") == job_id and result.get("diagnosisStatus") == "unvalidated"
                 and result.get("status") in ("ready", "unavailable")):
-            return result
+            return _exclusion_reason(result)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         pass
     return None

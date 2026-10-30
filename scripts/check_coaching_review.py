@@ -23,6 +23,23 @@ def summarize(rows):
     return review.summarize_observation(rows, "job", 1000, 270, 480, 1)
 
 
+incomplete = {**review.unavailable('job', 'SILHOUETTE_UNRELIABLE'),
+              'excludedFrames': [{'timeMs': i * 60, 'reason': 'CAMERA_MOTION_OR_BACKGROUND_UNCLEAR'} for i in range(9)]}
+assert review._exclusion_reason(incomplete)['reason'] == 'CAMERA_MOTION_OR_BACKGROUND_UNCLEAR'
+assert incomplete['reason'] == 'SILHOUETTE_UNRELIABLE', 'do not change saved cache data in memory'
+mixed = {**incomplete, 'excludedFrames': [{'reason': 'CAMERA_MOTION_OR_BACKGROUND_UNCLEAR'}] * 4 + [{'reason': 'SILHOUETTE_UNRELIABLE'}] * 4}
+assert review._exclusion_reason(mixed)['reason'] == 'PHASE_COVERAGE_INSUFFICIENT'
+assert review._exclusion_reason({**incomplete, 'excludedFrames': incomplete['excludedFrames'][:6]})['reason'] == 'SILHOUETTE_UNRELIABLE'
+timing = {**incomplete, 'excludedFrames': [{'reason': 'VIDEO_TIMING_UNAVAILABLE'}] * 7}
+assert review._exclusion_reason(timing)['reason'] == 'VIDEO_TIMING_UNAVAILABLE'
+with tempfile.TemporaryDirectory() as temporary:
+    cache = Path(temporary) / 'cached.json'
+    cache.write_text(json.dumps({'identity': {'fixture': 1}, 'result': incomplete}))
+    before = cache.read_bytes()
+    assert review._read_cache(cache, {'fixture': 1}, 'job')['reason'] == 'CAMERA_MOTION_OR_BACKGROUND_UNCLEAR'
+    assert cache.read_bytes() == before, 'correct the displayed reason without rewriting the old cache'
+
+
 positive = summarize(samples())
 assert positive["evidence"]["observation"] == "toward_ball"
 assert positive["diagnosisStatus"] == "unvalidated" and "practice" not in positive

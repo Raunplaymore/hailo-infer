@@ -55,7 +55,7 @@ def build_movement_guide(body, address_ms, impact_ms):
     for kind in ("head", "pelvis"):
         baseline = None
         for offset in (0, -33, 33, -66, 66, 100, 150):
-            t = max(100, address_ms) + offset
+            t = address_ms + offset
             if 0 <= t < impact_ms - 150:
                 baseline = window(t, kind)
                 if baseline:
