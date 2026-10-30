@@ -82,6 +82,28 @@ for dx in (-5, 5):
         if not row["baseline"]:
             row.update(edgePx=80-dx, transform=[[1,0,dx],[0,1,0]])
     assert summarize(moving_background)["reason"] == "CAMERA_BACKGROUND_AMBIGUOUS", "a stationary person cannot inherit background motion"
+for corrected_edge, dx in ((83, -1), (82, 1)):
+    borderline_correction = samples(0)
+    for row in borderline_correction:
+        if not row["baseline"]:
+            row.update(edgePx=corrected_edge, transform=[[1,0,dx],[0,1,0]])
+    assert summarize(borderline_correction)["reason"] == "CAMERA_BACKGROUND_AMBIGUOUS", "a small correction cannot change the movement verdict"
+mirrored_correction = samples(0)
+for row in mirrored_correction:
+    if not row["baseline"]:
+        row.update(edgePx=77, transform=[[1,0,1],[0,1,0]])
+assert review.summarize_observation(mirrored_correction, "job", 1000, 270, 480, -1)["reason"] == "CAMERA_BACKGROUND_AMBIGUOUS"
+shared_window = samples(0)
+for row in shared_window:
+    if not row["baseline"]:
+        row.update(edgePx=83, transform=[[1,0,-1 if row["timeMs"] < 620 else 0],[0,1,0]])
+assert summarize(shared_window)["evidence"]["focusMs"] == 740, "replay a sustained window shared by both assumptions"
+disjoint_windows = samples(0)
+for row in disjoint_windows:
+    if not row["baseline"]:
+        early = row["timeMs"] < 740
+        row.update(edgePx=83 if early else 82, transform=[[1,0,-1 if early else 1],[0,1,0]])
+assert summarize(disjoint_windows)["reason"] == "CAMERA_BACKGROUND_AMBIGUOUS", "different positive windows do not corroborate a replay"
 for dx, expected in ((2, "ready"), (2.1, "unavailable")):
     borderline = samples(0)
     for row in borderline:
@@ -278,7 +300,7 @@ else:
     print("background translation, texture, foreground exclusion and silhouette component checks passed")
 
     import mediapipe as mp
-    assert review.CACHE_REVISION == 8, "the new reference must not reuse prior silhouette results"
+    assert review.CACHE_REVISION == 9, "the correction-consistency check must not reuse prior silhouette results"
     class FakeCapture:
         def __init__(self, mode):
             self.mode, self.time, self.seeks = mode, 0, []

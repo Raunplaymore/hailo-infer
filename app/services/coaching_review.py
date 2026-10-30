@@ -12,7 +12,7 @@ from app.services.impact_review import stat_identity
 from app.services.practice_review import load_practice_body, number
 
 VERSION = "dtl-coaching-review-v1"
-CACHE_REVISION = 8
+CACHE_REVISION = 9
 REVIEW_LOCK = threading.Lock()
 
 
@@ -100,12 +100,18 @@ def summarize_observation(samples, job_id, impact_ms, width, height, direction):
     if any(abs((image_x(s) - image_baseline) - (s["edgePx"] - baseline)) > noise for s in before):
         return unavailable(job_id, "CAMERA_BACKGROUND_AMBIGUOUS")
     shifts = [(s["edgePx"] - baseline) * direction for s in before]
-    sustained = [i for i in range(2, len(before)) if min(shifts[i-2:i+1]) > noise
-                 and all(before[j]["timeMs"]-before[j-1]["timeMs"] <= 85 for j in (i-1, i))]
-    focus = before[max(sustained, key=lambda i: shifts[i])] if sustained else before[max(range(len(before)), key=lambda i: shifts[i])]
-    observation = "toward_ball" if sustained else "no_clear_shift"
+    image_shifts = [(image_x(s) - image_baseline) * direction for s in before]
+    windows = [i for i in range(2, len(before))
+               if all(before[j]["timeMs"]-before[j-1]["timeMs"] <= 85 for j in (i-1, i))]
+    sustained = [i for i in windows if min(shifts[i-2:i+1]) > noise]
+    # A replay window must remain sustained under both background assumptions.
+    agreed = [i for i in sustained if min(image_shifts[i-2:i+1]) > noise]
+    if not agreed and (sustained or any(min(image_shifts[i-2:i+1]) > noise for i in windows)):
+        return unavailable(job_id, "CAMERA_BACKGROUND_AMBIGUOUS")
+    focus = before[max(agreed, key=lambda i: shifts[i])] if agreed else before[max(range(len(before)), key=lambda i: shifts[i])]
+    observation = "toward_ball" if agreed else "no_clear_shift"
     return {**result, "status": "ready", "reason": None,
-            "summary": "검사한 구간에서 골반 뒤쪽 윤곽이 시작 기준선보다 추정한 공 방향에 보입니다." if sustained else
+            "summary": "검사한 구간에서 골반 뒤쪽 윤곽이 시작 기준선보다 추정한 공 방향에 보입니다." if agreed else
                        "검사한 구간에서 골반 뒤쪽 윤곽의 뚜렷한 추정 공 방향 이동은 찾지 못했습니다.",
             "evidence": {"addressMs": min(base, key=lambda s: abs(s["edgePx"] - baseline))["timeMs"],
                          "startMs": before[0]["timeMs"], "endMs": before[-1]["timeMs"],
